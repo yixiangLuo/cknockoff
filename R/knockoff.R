@@ -16,8 +16,19 @@
 #   return(X_kn)
 # }
 
-kn_rej_fdp <- function(kn_statistics, alpha, selective = TRUE,
-                       k_min = 0, W_min = Inf, early_stop = F){
+#' Title
+#'
+#' @param kn_statistics Knockoff W-statistics
+#' @param alpha nominated FDR level
+#' @param selective T: use selective SeqStep, F: use SeqStep
+#' @param early_stop 1: early stop at #\{W>0\} < 1/alpha, 2: at 1 & fdp_hat <= 1
+#'
+#' @return list(selected, estimated fdp, |W_(k hat)|)
+#' @export
+#'
+#' @examples
+kn.select <- function(kn_statistics, alpha,
+                      selective = T, early_stop = F){
   p <- length(kn_statistics)
   W_desc_ind <- order(abs(kn_statistics), decreasing = T)
   W_desc <- kn_statistics[W_desc_ind]
@@ -34,12 +45,8 @@ kn_rej_fdp <- function(kn_statistics, alpha, selective = TRUE,
     fdp[k] <- (1 + neg_stat_num) / max(1, pos_stat_num)
   }
   ok <- which(fdp <= alpha)
-  k_hat <- max(k_min, ifelse(length(ok) > 0, max(ok), 0))
+  k_hat <- ifelse(length(ok) > 0, max(ok), 0)
 
-  if(W_min < Inf){
-    ok <- which(abs(W_desc) >= W_min)
-    k_hat <- max(k_hat, ifelse(length(ok) > 0, max(ok), 0))
-  }
   if(early_stop == 1){
     ok <- which(cumsum(W_desc > 0) < 1/alpha)
     k_hat <- max(k_hat, ifelse(length(ok) > 0, max(ok), 0))
@@ -56,7 +63,6 @@ kn_rej_fdp <- function(kn_statistics, alpha, selective = TRUE,
   }
   fdp_est <- ifelse(k_hat > 0, fdp[k_hat], 1)
   W_k_hat <- abs(W_desc[max(k_hat, 1)])
-
 
   results <- list(selected = selected, fdp_est = fdp_est,  W_k_hat = W_k_hat)
 }

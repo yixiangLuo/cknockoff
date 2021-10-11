@@ -35,6 +35,7 @@ parse_args <- function(X, y, knockoffs, statistic,
         statistic <- get(prelim_result$call$statistic, pos = 1)
       },
       error = function(error_message){
+        browser()
         if(statistic_missing){
           stop("Cannot read function \"statistic\" from the knockoff.result object \"prelim_result\". \n",
                "please supply it explicitly by passing \"statistic = ...\" in cknockoff().\n",

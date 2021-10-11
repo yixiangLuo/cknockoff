@@ -179,8 +179,8 @@ kn_stat_sampling <- function(kn_alpha, j, y.pack, X.pack, node_num = 10,
     }
 
     kn_abs_stat_j[node_i] <- abs(kn_stats[j])
-    kn_stat_thrs[node_i] <- (kn_rej_fdp(kn_stats, kn_alpha,
-                                        selective = T, early_stop = 1))$W_k_hat
+    kn_stat_thrs[node_i] <- (kn.select(kn_stats, kn_alpha,
+                                       selective = T, early_stop = 1))$W_k_hat
   }
 
   # return the values

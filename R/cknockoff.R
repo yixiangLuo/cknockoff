@@ -173,8 +173,8 @@ cknockoff <- function(X, y,
       kn_stats_obs <- statistic(X, X.pack$X_kn, y)
     }
 
-    kn_selected <- kn_rej_fdp(kn_stats_obs, kappa * alpha,
-                              selective = T, early_stop = 0)$selected
+    kn_selected <- kn.select(kn_stats_obs, kappa * alpha,
+                             selective = T, early_stop = 0)$selected
   } else{
     kn_stats_obs <- record$kn.statistic
     kn_selected <- record$kn.selected
@@ -260,8 +260,8 @@ cknockoff <- function(X, y,
 
         ## compute weights
         # make rejection and fdp estimation based on knockoff statistics
-        kn_result <- kn_rej_fdp(kn_stat_mc, kappa * alpha,
-                                selective = T, early_stop = 1)
+        kn_result <- kn.select(kn_stat_mc, kappa * alpha,
+                               selective = T, early_stop = 1)
         kn_selected_RB <- kn_result$selected
 
         # compute weight
@@ -277,8 +277,8 @@ cknockoff <- function(X, y,
         Bonf_selected_RB <- which(pvals_RB <= (1-kappa) * alpha / p)
 
         # knockoff rejections
-        kn_result <- kn_rej_fdp(kn_stat_mc, kappa * alpha,
-                                selective = T, early_stop = 0)
+        kn_result <- kn.select(kn_stat_mc, kappa * alpha,
+                               selective = T, early_stop = 0)
         kn_selected_RB <- kn_result$selected
 
         # R hat

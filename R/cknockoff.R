@@ -339,19 +339,20 @@ cknockoff <- function(X, y,
   if(!is.null(X.pack$X.names))
     names(selected) <- X.pack$X.names[selected]
 
-  # # predict the sign of each beta
-  # sign_predict <- rep(0, p)
-  # sign_predict[kn_selected] <- (sign(t(X - X.pack$X_kn) %*% y))[kn_selected]
-  # sign_predict[setdiff(selected, kn_selected)] <- sign(matrix(y, nrow = 1) %*% X.pack$vj_mat[, setdiff(selected, kn_selected)])
+  # predict the sign of each beta
+  sign_predict <- rep(0, p)
+  sign_predict[kn_selected] <- (sign(matrix(y, nrow = 1) %*% (X.pack$X - X.pack$X_kn)))[kn_selected]
+  sign_predict[setdiff(selected, kn_selected)] <- sign(matrix(y, nrow = 1) %*% X.pack$vj_mat[, setdiff(selected, kn_selected)])
 
   # record the working parameter for recursive exploration
   if(!is.null(record) && record$iteration > 0){
     checked_so_far <- union(union(record$checked_so_far, candidates), selected)
+
+    if(length(checked_so_far) == p){
+      message("Has tested all the hypotheses via calibration.")
+    }
   } else{
     checked_so_far <- union(candidates, selected)
-  }
-  if(length(checked_so_far) == p){
-    message("Has tested all the hypotheses via calibration.")
   }
 
   record <- list(iteration = ifelse(is.null(record), 1, record$iteration+1),
@@ -371,6 +372,7 @@ cknockoff <- function(X, y,
                            y = y,
                            kn.statistic = kn_stats_obs,
                            selected = selected,
+                           sign_predict = sign_predict,
                            record = record),
                       class = 'cknockoff.result')
 

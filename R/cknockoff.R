@@ -124,9 +124,14 @@ cknockoff <- function(X, y,
 
   # knockoff.type <- match.arg(knockoff.type)
 
-  cknockoff.call <- match.call.defaults()
-  cknockoff.call[[1]] <- as.symbol("parse_args")
-  args <- eval(cknockoff.call)
+  # cknockoff.call <- match.call.defaults()
+  # cknockoff.call[[1]] <- as.symbol("parse_args")
+  # args <- eval(cknockoff.call)
+  envir <- parent.frame()
+  args <- parse_args(X, y, knockoffs, statistic,
+                     alpha, kappa, n_cores, knockoff.type,
+                     prelim_result, X.pack,
+                     envir = envir)
 
   check_args(args)
 
@@ -174,7 +179,7 @@ cknockoff <- function(X, y,
     }
 
     kn_selected <- kn.select(kn_stats_obs, kappa * alpha,
-                             selective = T, early_stop = 0)$selected
+                             selective = T, early_stop = F)$selected
   } else{
     kn_stats_obs <- record$kn.statistic
     kn_selected <- record$kn.selected
@@ -261,7 +266,7 @@ cknockoff <- function(X, y,
         ## compute weights
         # make rejection and fdp estimation based on knockoff statistics
         kn_result <- kn.select(kn_stat_mc, kappa * alpha,
-                               selective = T, early_stop = 1)
+                               selective = T, early_stop = T)
         kn_selected_RB <- kn_result$selected
 
         # compute weight
@@ -278,7 +283,7 @@ cknockoff <- function(X, y,
 
         # knockoff rejections
         kn_result <- kn.select(kn_stat_mc, kappa * alpha,
-                               selective = T, early_stop = 0)
+                               selective = T, early_stop = F)
         kn_selected_RB <- kn_result$selected
 
         # R hat

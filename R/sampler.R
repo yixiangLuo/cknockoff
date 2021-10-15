@@ -96,7 +96,15 @@ where_pval_rej <- function(j, y.pack){
 
   tval <- abs(tj_obs)
 
-  rej_set <- list(left = c(-Inf, tval), right = c(-tval, Inf))
+  # under double precision, if pval = 1e-17, then pt(rej_set) will contain
+  # [1,1], which would sample t = Inf and lead to a NaN y sample.
+  # if pval is tiny, just reject it.
+  bound <- abs(qt(1e-14, df = y.pack$df))
+  if(tval > bound){
+    rej_set <- list(left = NULL, right = NULL)
+  } else{
+    rej_set <- list(left = c(-bound, tval), right = c(-tval, bound))
+  }
 
   return(rej_set)
 }
@@ -180,14 +188,13 @@ kn_stat_sampling <- function(kn_alpha, j, y.pack, X.pack, node_num = 10,
 
     kn_abs_stat_j[node_i] <- abs(kn_stats[j])
     kn_stat_thrs[node_i] <- (kn.select(kn_stats, kn_alpha,
-                                       selective = T, early_stop = 1))$W_k_hat
+                                       selective = T, early_stop = T))$W_k_hat
   }
 
   # return the values
   return(list(vjy_nodes = vjy_nodes, kn_abs_stat_j = kn_abs_stat_j,
               kn_stat_thrs = kn_stat_thrs))
 }
-
 
 region_F1geqF2 <- function(x, y1, y2, method){
   # linear interpolation

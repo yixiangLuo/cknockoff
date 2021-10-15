@@ -1,6 +1,6 @@
 parse_args <- function(X, y, knockoffs, statistic,
                        alpha, kappa, n_cores, knockoff.type,
-                       prelim_result, X.pack){
+                       prelim_result, X.pack, envir){
 
   if(is(prelim_result, "cknockoff.result")){
     X <- prelim_result$X
@@ -24,7 +24,7 @@ parse_args <- function(X, y, knockoffs, statistic,
     y <- prelim_result$y
     knockoffs <- prelim_result$Xk
     kappa <- 1
-    X.pack <- NULL
+    # X.pack <- NULL
     record <- list(iteration = 0,
                    kn.statistic = prelim_result$statistic,
                    kn.selected = prelim_result$selected)
@@ -32,10 +32,9 @@ parse_args <- function(X, y, knockoffs, statistic,
     statistic_missing <- evalq(missing(statistic), parent.frame())
     tryCatch(
       {
-        statistic <- get(prelim_result$call$statistic, pos = 1)
+        statistic <- eval(prelim_result$call$statistic, envir = envir)
       },
       error = function(error_message){
-        browser()
         if(statistic_missing){
           stop("Cannot read function \"statistic\" from the knockoff.result object \"prelim_result\". \n",
                "please supply it explicitly by passing \"statistic = ...\" in cknockoff().\n",
@@ -45,15 +44,20 @@ parse_args <- function(X, y, knockoffs, statistic,
       }
     )
 
-    if(!is.null(prelim_result$call$fdr)){
-      alpha <- as.numeric(prelim_result$call$fdr)
-    }
-    else if(evalq(missing(alpha), parent.frame())){
-      stop("Cannot read nominated \"fdr\" from the knockoff.result object \"prelim_result\". \n",
-           "please supply it explicitly by passing \"alpha = ...\" in cknockoff().\n",
-           "Please note you must use the same nominated FDR level as in knockoff to get valid inference.")
-    }
-    # else use arg alpha
+    alpha_missing <- evalq(missing(alpha), parent.frame())
+    tryCatch(
+      {
+        alpha <- eval(prelim_result$call$fdr, envir = envir)
+      },
+      error = function(error_message){
+        if(alpha_missing){
+          stop("Cannot read nominated \"fdr\" from the knockoff.result object \"prelim_result\". \n",
+               "please supply it explicitly by passing \"alpha = ...\" in cknockoff().\n",
+               "Please note you must use the same nominated FDR level as in knockoff to get valid inference.")
+        }
+        # else use arg alpha
+      }
+    )
   }
   else if((!missing(X) || !is.null(X.pack)) && !missing(y)){
     record <- NULL

@@ -21,7 +21,7 @@
 #' @param kn_statistics Knockoff W-statistics
 #' @param alpha nominated FDR level
 #' @param selective T: use selective SeqStep, F: use SeqStep
-#' @param early_stop 1: early stop at #\{W>0\} < 1/alpha, 2: at 1 & fdp_hat <= 1
+#' @param early_stop T/F
 #'
 #' @return list(selected, estimated fdp, |W_(k hat)|)
 #' @export
@@ -47,14 +47,14 @@ kn.select <- function(kn_statistics, alpha,
   ok <- which(fdp <= alpha)
   k_hat <- ifelse(length(ok) > 0, max(ok), 0)
 
-  if(early_stop == 1){
+  if(early_stop){
     ok <- which(cumsum(W_desc > 0) < 1/alpha)
     k_hat <- max(k_hat, ifelse(length(ok) > 0, max(ok), 0))
   }
-  if(early_stop == 2){
-    ok <- which((fdp <= 1) & (cumsum(W_desc > 0) < 1/alpha))
-    k_hat <- max(k_hat, ifelse(length(ok) > 0, max(ok), 0))
-  }
+  # if(early_stop == 2){
+  #   ok <- which((fdp <= 1) & (cumsum(W_desc > 0) < 1/alpha))
+  #   k_hat <- max(k_hat, ifelse(length(ok) > 0, max(ok), 0))
+  # }
 
   if(k_hat > 0){
     selected <- sort(W_desc_ind[which(W_desc[1:k_hat] > 0)])

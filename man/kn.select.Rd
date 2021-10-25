@@ -13,7 +13,7 @@ kn.select(kn_statistics, alpha, selective = T, early_stop = F)
 
 \item{selective}{T: use selective SeqStep, F: use SeqStep}
 
-\item{early_stop}{1: early stop at #\{W>0\} < 1/alpha, 2: at 1 & fdp_hat <= 1}
+\item{early_stop}{T/F}
 }
 \value{
 list(selected, estimated fdp, |W_(k hat)|)

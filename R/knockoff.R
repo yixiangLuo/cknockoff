@@ -1,20 +1,46 @@
-# MRC_Xkn <- function(X, method = "mvr", normalize = T, num_processes = 1){
-#   knockpy <- import("knockpy")
-#
-#   Simga_X <- t(X) %*% X
-#   n <- NROW(X)
-#   solver <- ifelse(method == "sdp", "sdp", "cd")
-#
-#   s_mat <- knockpy$smatrix$compute_smatrix(Simga_X, method = method, solver = solver,
-#                                            num_processes = num_processes)
-#   X_kn <- knockpy$knockoffs$produce_FX_knockoffs(X, Simga_X, s_mat) %>% matrix(nrow = n)
-#
-#   if(normalize){
-#     X_kn <- scale(X_kn, center = FALSE, scale = sqrt(colSums(X_kn^2)))
-#   }
-#
-#   return(X_kn)
-# }
+#' Title
+#'
+#' @param X
+#' @param method
+#' @param solver
+#' @param knockpy
+#' @param num_processes
+#'
+#' @return a list of (X, X_kn)
+#' @export
+create.fixed.MRC <- function(X,
+                             method = c("mvr", "maxent", "mmi",
+                                        "sdp", "equicorrelated", "ci"),
+                             solver = NULL,
+                             knockpy = NULL,
+                             num_processes = 1){
+
+  if(!requireNamespace("reticulate", quietly=T)) {
+    stop("reticulate is required for calling python package 'knockpy' but is not installed.")
+  }
+
+  method <- match.arg(method)
+  if(is.null(solver)){
+    solver <- ifelse(method == "sdp", "sdp", "cd")
+  }
+
+  if(is.null(knockpy)){
+    knockpy <- reticulate::import("knockpy")
+  }
+
+  X <- scale(X, center = FALSE, scale = sqrt(colSums(X^2)))
+
+  Simga_X <- t(X) %*% X
+  n <- NROW(X)
+
+  s_mat <- knockpy$smatrix$compute_smatrix(Simga_X, method = method, solver = solver,
+                                           num_processes = num_processes)
+  Xk <- knockpy$knockoffs$produce_FX_knockoffs(X, solve(Simga_X), s_mat)
+  Xk <- matrix(Xk, nrow = n)
+  # Xk <- scale(Xk, center = FALSE, scale = sqrt(colSums(Xk^2)))
+
+  return(list(X = X, Xk = Xk))
+}
 
 #' Title
 #'

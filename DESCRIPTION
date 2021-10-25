@@ -20,6 +20,7 @@ Imports:
     stats,
     utils
 Suggests:
+    reticulate,
     KernSmooth,
     doParallel,
     parallel,

@@ -198,7 +198,7 @@ cknockoff <- function(X, y,
   candidates <- cKn_candidates(kn_stats_obs, pvals_obs, alpha, record, selected)
 
   # check each hypothesis in sequence/parallel
-  cali_selected <- forall(j = candidates) %exec% {
+  cali_selected <- forall(j = candidates, .options.multicore = list(preschedule = F)) %exec% {
 
     # prepare repeatedly used quantities
     pval_obs <- pvals_obs[j]

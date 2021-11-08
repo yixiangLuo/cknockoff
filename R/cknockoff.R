@@ -91,7 +91,8 @@ NULL
 #' X <- matrix(rnorm(n*p), n)
 #' nonzero <- sample(p, k)
 #' beta <- 3.5 * (1:p %in% nonzero)
-#' y = X %*% beta + rnorm(n)
+#' y <- X %*% beta + rnorm(n)
+#' print(which(1:p %in% nonzero))
 #'
 #' # Basic usage
 #' result <- cknockoff(X, y, alpha = 0.05, n_cores = 1)
@@ -116,11 +117,16 @@ cknockoff <- function(X, y,
                       n_cores = 1,
                       knockoff.type = c("fixed", "model"),
                       prelim_result = NULL,
-                      X.pack = NULL){
+                      X.pack = NULL,
+                      Rhat_level = 0,
+                      cali_with_kn = F,
+                      cali_var = "pval"){
 
   mc_rounds <- 5
   mc_size <- 100
-  mc_size <- 2 * ceiling(mc_size / 2)
+
+  Rhat_max_num <- 5
+  Rhat_calc_max_step <- 4
 
   # knockoff.type <- match.arg(knockoff.type)
 
@@ -195,7 +201,21 @@ cknockoff <- function(X, y,
   }
 
   # find the promising features not selected or checked yet
-  candidates <- cKn_candidates(kn_stats_obs, pvals_obs, alpha, record, selected)
+  candidates <- cKn_candidates(kn_stats_obs, pvals_obs, alpha, record, selected, cali_with_kn = cali_with_kn)
+
+  cali_stats_obs <- rep(NA, p)
+  y_fit_noj_all <- matrix(NA, nrow = n, ncol = p)
+  if(cali_var != "pval"){
+    if(cali_var == "LM_lasso"){
+      for(j in candidates){
+        fit <- glmnet::glmnet(X[, -j], y, lambda=2*y.pack$sigmahat_XXk_res/n, intercept=T, standardize=F, standardize.response=F, family="gaussian")
+        y_fit_noj_all[, j] <- as.vector(X[, -j] %*% fit$beta + rep(fit$a0, each = n))
+      }
+    }
+    cali_stats_obs <- cali_statasitic(X.pack$X, X.pack$X_kn, y,
+                                      statistic, sigma_tilde = y.pack$sigmahat_XXk_res,
+                                      y_fit_noj_all, type = cali_var)
+  }
 
   # check each hypothesis in sequence/parallel
   cali_selected <- forall(j = candidates, .options.multicore = list(preschedule = F)) %exec% {
@@ -212,12 +232,38 @@ cknockoff <- function(X, y,
     # conditional on Sj. This will be used in generating Monte-Carlo samples of y
     # conditional on Sj.
     kn_rej_set <- where_kn_rej(kappa * alpha, j, y.pack,
-                                X.pack = list(X = X.pack$X, X_kn = X.pack$X_kn,
-                                              vj = X.pack$vj_mat[, j],
-                                              X_res_Xk_basis = X.pack$X_res_Xk_basis,
-                                              XXk_res_unit = X.pack$XXk_res_unit),
-                                statistic, method = kn_region_method)
-    pval_rej_set <- where_pval_rej(j, y.pack)
+                               X.pack = list(X = X.pack$X, X_kn = X.pack$X_kn,
+                                             vj = X.pack$vj_mat[, j],
+                                             X_res_Xk_basis = X.pack$X_res_Xk_basis,
+                                             XXk_res_unit = X.pack$XXk_res_unit),
+                               statistic, method = kn_region_method)
+    if(cali_var == "pval"){
+      pval_rej_set <- where_pval_rej(j, y.pack)
+    } else{
+      cali_thr <- cali_stats_obs[j]
+      cali_rej_set <- where_cali_rej(j, y.pack,
+                                     X.pack = list(X = X.pack$X, X_kn = X.pack$X_kn,
+                                                   vj = X.pack$vj_mat[, j],
+                                                   X_res_Xk_basis = X.pack$X_res_Xk_basis,
+                                                   XXk_res_unit = X.pack$XXk_res_unit),
+                                     statistic,
+                                     method = kn_region_method, cali_var,
+                                     cali_thr = cali_thr,
+                                     y_fit_noj_all = y_fit_noj_all)
+    }
+
+
+    if(Rhat_level > 0){
+      relax_factor <- 2
+      Rhat_to_rej_j_est <- Rhat_to_rej_j(alpha, kappa, n, p,
+                                         pval_rej_set, kn_rej_set, cali_with_kn)
+      Rhat_level_j <- ifelse(Rhat_to_rej_j_est <= Rhat_max_num * relax_factor &&
+                               Rhat_to_rej_j_est >= 1 / relax_factor, 1, 0)
+    } else{
+      Rhat_level_j <- 0
+    }
+    Rhat_vec <- NULL
+
 
     # we divide the whole MC samples set into "mc_rounds" batches of size "mc_size"
     # and work on each batch sequentially for efficiency reason.
@@ -226,11 +272,21 @@ cknockoff <- function(X, y,
       ineq_combine <- c(ineq_combine, rep(NA, mc_size/2))
 
       # generate Monte-Carlo samples of y conditional Sj for this batch
-      sample_res <- y_sampler_cond_Sj(mc_size, pval_rej_set, kn_rej_set, j,
-                                      y.pack,
-                                      X.pack = list(vj = X.pack$vj_mat[, j],
-                                                    X_res_Xk_basis = X.pack$X_res_Xk_basis,
-                                                    XXk_res_unit = X.pack$XXk_res_unit))
+      if(cali_var == "pval"){
+        sample_res <- y_sampler_cond_Sj(mc_size, pval_rej_set, kn_rej_set, j,
+                                        y.pack,
+                                        X.pack = list(vj = X.pack$vj_mat[, j],
+                                                      X_res_Xk_basis = X.pack$X_res_Xk_basis,
+                                                      XXk_res_unit = X.pack$XXk_res_unit))
+      } else{
+        sample_res <- y_sampler_cond_Sj_newCali(mc_size, cali_rej_set, kn_rej_set, j,
+                                                y.pack,
+                                                X.pack = list(vj = X.pack$vj_mat[, j],
+                                                              X_res_Xk_basis = X.pack$X_res_Xk_basis,
+                                                              XXk_res_unit = X.pack$XXk_res_unit))
+      }
+
+
       # make decision if we can tell whether ineq <=0 based on the sampling region
       if(is.numeric(sample_res) && mc_round == 1){
         if(sample_res == 0) break
@@ -262,57 +318,47 @@ cknockoff <- function(X, y,
         } else{
           kn_stat_mc <- statistic(X, X.pack$X_kn, y_cond[, mc_i])
         }
+        if(cali_var != "pval"){
+          cali_stat_mc <- cali_statasitic(X, X.pack$X_kn, y_cond[, mc_i],
+                                          statistic, sigma_tilde = sigmahat_XXk_res[mc_i],
+                                          y_fit_noj_all, type = cali_var)[j]
+        } else{
+          cali_stat_mc <- NA
+        }
 
-        ## compute weights
-        # make rejection and fdp estimation based on knockoff statistics
-        kn_result <- kn.select(kn_stat_mc, kappa * alpha,
-                               selective = T, early_stop = T)
-        kn_selected_RB <- kn_result$selected
+        if(Rhat_level_j > 0 && length(Rhat_vec) >= 10){
+          if(mean(1/Rhat_vec) >= min(1/1.2, 2/Rhat_to_rej_j_est) &&
+             mean(ineq[1:mc_used]) > 0.08/mc_used){
+            Rhat_level_j <- 0
+          }
+        }
 
-        # compute weight
-        kn_null_num <- max(1, (kn_result$fdp_est * length(kn_selected_RB)))
-        w_tilde <- (j %in% kn_selected_RB) / kn_null_num * kappa
+        # if(Rhat_level_j > 0){
+        #   X.pack_prepare <- X.pack
+        # } else{
+        #   X.pack_prepare <- NA
+        # }
+        fj_result <- calc_fj(j, y_cond[, mc_i], sample_weights[mc_i],
+                             X.pack = X.pack, X.pack$vj_mat,
+                             alpha, kappa, pval_obs,
+                             statistic, kn_stat_mc, sigmahat_X_res[mc_i],
+                             cali_with_kn, Rhat_level = Rhat_level_j,
+                             Rhat_max_num, Rhat_calc_max_step,
+                             cali_var, cali_stats_obs[j], cali_stat_mc)
 
-        ## compute individual FDP contribution (g_star in the code)
-        # p-values
-        tvals_RB <- y_to_t(y_cond[, mc_i], X.pack$vj_mat, sigmahat_X_res[mc_i])
-        pvals_RB <- pvals_t(tvals_RB, df, side = "two")
 
-        # Bonferroni rejections
-        Bonf_selected_RB <- which(pvals_RB <= (1-kappa) * alpha / p)
-
-        # knockoff rejections
-        kn_result <- kn.select(kn_stat_mc, kappa * alpha,
-                               selective = T, early_stop = F)
-        kn_selected_RB <- kn_result$selected
-
-        # R hat
-        selected_RB <- union(kn_selected_RB, Bonf_selected_RB)
-
-        # compute selections by a marginal p-value test
-        Mg_selected_RB <- ifelse(pvals_RB[j] <= pval_obs, j, 0)
-
-        g_star <- (j %in% union(kn_selected_RB, Mg_selected_RB)) / length(union(selected_RB, j))
+        Rhat_vec <- c(Rhat_vec, fj_result$Rhat)
 
         # record the result
         mc_used <- mc_used + 1
-        ineq[mc_used] <- (g_star - w_tilde * alpha) * sample_weights[mc_i] - (1-kappa) * alpha / p
+        ineq[mc_used] <- fj_result$fj
 
-        # compute the confidence interval
-        if(mc_used %% 2 == 0){
+        # compute the confidence interval and make decision
+        decision <- make_decision(ineq[1:mc_used], ineq_bounds, threshold = 0,
+                                  rej_alpha = min(0.05, alpha * max(1, length(init_selected)) / length(candidates)),
+                                  accept_alpha = 0.05)
+        if(decision$confident){ break }
 
-          combine_used <- mc_used/2
-          ineq_combine[combine_used] <- mean(c(ineq[mc_used-1], ineq[mc_used]))
-
-          # make decision
-          decision <- make_decision(ineq_combine[1:combine_used], ineq_bounds, threshold = 0,
-                                    rej_alpha = min(0.05, alpha * max(1, length(init_selected)) / length(candidates)),
-                                    accept_alpha = 0.05)
-
-          if(decision$confident){
-            break
-          }
-        }
       }
 
       # decide rejecting or not
@@ -343,6 +389,18 @@ cknockoff <- function(X, y,
   selected <- union(selected, unlist(cali_selected))
   if(!is.null(X.pack$X.names))
     names(selected) <- X.pack$X.names[selected]
+
+
+  # candidates_org <- candidates
+  # candidates <- sapply(candidates, function(candidate){
+  #   prefer <- kn_prefer(candidate, kn_stats_obs, alpha)
+  #   if(prefer) return(candidate)
+  #   else return(NA)
+  # })
+  # candidates <- candidates[!is.na(candidates)]
+  # missed <- intersect(setdiff(candidates_org, candidates), selected)
+  # write.table(missed, paste0("missed-", alpha, ".csv"), sep = ",", col.names = FALSE, append = T)
+
 
   # predict the sign of each beta
   sign_predict <- rep(0, p)
@@ -383,3 +441,258 @@ cknockoff <- function(X, y,
 
   return(result)
 }
+
+
+Rhat_to_rej_j <- function(alpha, kappa, n, p, pval_rej_set, kn_rej_set,
+                          cali_with_kn){
+  df <- n-p
+
+  if(!is.null(pval_rej_set$left)){
+    pval_rej_lb <- pt(pval_rej_set$left, df = df, lower.tail = T)
+    pval_rej_ub <- pt(pval_rej_set$right, df = df, lower.tail = T)
+    pval_rej_mass <- sum(pval_rej_ub - pval_rej_lb)
+  } else{
+    return(Inf)
+  }
+
+  if(!is.null(kn_rej_set$left)){
+    kn_rej_lb <- pt(kn_rej_set$left, df = df, lower.tail = T)
+    kn_rej_ub <- pt(kn_rej_set$right, df = df, lower.tail = T)
+    kn_rej_mass <- sum(kn_rej_ub - kn_rej_lb)
+  } else{
+    return(Inf)
+  }
+
+
+  if(cali_with_kn){
+    if((min(kn_rej_lb) - pval_rej_ub[1] > 0.1)
+       || (pval_rej_lb[2] - max(kn_rej_ub)) > 0.1){
+      pval_rej_mass <- pval_rej_mass / 2
+    }
+  }
+
+  b_j_est <- kappa * alpha / (ceiling(1/alpha - 1)) * (pval_rej_mass + kn_rej_mass) + (1-kappa) * alpha / p
+  Rhat_to_rej <- pval_rej_mass / b_j_est
+
+  return(Rhat_to_rej)
+}
+
+cknockoff_Rhat <- function(X.pack, y, j_exclude,
+                           kn_stats_obs, tvals_obs,
+                           statistic,
+                           alpha,
+                           kappa,
+                           cali_with_kn,
+                           Rhat_max_num,
+                           Rhat_calc_max_step){
+  n <- length(y)
+  p <- length(tvals_obs)
+  df <- n - p
+
+  pvals_obs <- pvals_t(tvals_obs, df, side = "two")
+
+  candidates <- cKn_candidates(kn_stats_obs, pvals_obs, alpha,
+                               record = NULL, selected = NULL, cali_with_kn)
+  candidates <- intersect(candidates, which(pvals_obs <= min(0.5 * alpha / p, 1e-3)))
+  candidates <- setdiff(candidates, j_exclude)
+  rank_p <- rank(pvals_obs[candidates])
+  rank_kn <- rank(-abs(kn_stats_obs[candidates]))
+  ranks <- rank(rank_p + rank_kn, ties.method = "first")
+  candidates[ranks] <- candidates
+
+  n_candidates <- min(length(candidates), Rhat_max_num)
+  if(n_candidates > 0)  candidates <- candidates[1:n_candidates]
+  else return(list(selected = NULL))
+
+  y.pack <- process_y(X.pack, y)
+
+  selected <- sapply(candidates, function(j){
+    if(pvals_obs[j] < 1e-14) return(j)
+
+    step_size <- pvals_obs[j] / (kappa * alpha / (ceiling(1/alpha - 1))) * 1.5
+    pval_left_obs <- pt(tvals_obs[j], df = df, lower.tail = TRUE)
+
+    calc_steps_remains <- Rhat_calc_max_step
+    DP_j_accumulate <- pvals_obs[j]
+    b_j_accumulate <- (1-kappa) * alpha / p
+
+    pval_left_nodes <- pval_left_obs - sign(tvals_obs[j]) * (1:Rhat_calc_max_step) * step_size
+    tval_nodes <- qt(pval_left_nodes, df = df, lower.tail = TRUE)
+    vjy_nodes <- tj_to_vjy(tval_nodes, y.pack$y_Pi_Xnoj_res_norm2, df)
+    y_results <- vjy_to_y(vjy_nodes, j, y.pack,
+                          X.pack = list(vj = X.pack$vj_mat[, j],
+                                        X_res_Xk_basis = X.pack$X_res_Xk_basis,
+                                        XXk_res_unit = X.pack$XXk_res_unit))
+
+    for(mc_i in 1:Rhat_calc_max_step){
+      if("sigma_tilde" %in% names(formals(statistic))){
+        kn_stat_mc <- statistic(X.pack$X, X.pack$X_kn, y_results$y_samples[, mc_i],
+                                sigma_tilde = y_results$sigmahat_XXk_res[mc_i])
+      } else{
+        kn_stat_mc <- statistic(X.pack$X, X.pack$X_kn, y_results$y_samples[, mc_i])
+      }
+
+      fj_result <- calc_fj(j, y_results$y_samples[, mc_i], sample_weight_mc = 1,
+                           X.pack = NA, X.pack$vj_mat,
+                           alpha, kappa, pvals_obs[j],
+                           statistic, kn_stat_mc, y_results$sigmahat_X_res[mc_i],
+                           cali_with_kn, Rhat_level = 0,
+                           Rhat_max_num, Rhat_calc_max_step)
+
+      DP_j_accumulate <- DP_j_accumulate + fj_result$DP_j * step_size
+      b_j_accumulate <- b_j_accumulate + fj_result$b_j * step_size
+
+      if(DP_j_accumulate <= b_j_accumulate) return(j)
+
+      calc_steps_remains <- calc_steps_remains - 1
+      if(calc_steps_remains == 0) break
+    }
+
+    if(calc_steps_remains > 0){
+      pval_left_nodes <- 1-pval_left_obs + sign(tvals_obs[j]) * (1:Rhat_calc_max_step) * step_size
+      tval_nodes <- qt(pval_left_nodes, df = df, lower.tail = TRUE)
+      vjy_nodes <- tj_to_vjy(tval_nodes, y.pack$y_Pi_Xnoj_res_norm2, df)
+      y_results <- vjy_to_y(vjy_nodes, j, y.pack,
+                            X.pack = list(vj = X.pack$vj_mat[, j],
+                                          X_res_Xk_basis = X.pack$X_res_Xk_basis,
+                                          XXk_res_unit = X.pack$XXk_res_unit))
+
+      for(mc_i in 1:Rhat_calc_max_step){
+        if("sigma_tilde" %in% names(formals(statistic))){
+          kn_stat_mc <- statistic(X.pack$X, X.pack$X_kn, y_results$y_samples[, mc_i],
+                                  sigma_tilde = y_results$sigmahat_XXk_res[mc_i])
+        } else{
+          kn_stat_mc <- statistic(X.pack$X, X.pack$X_kn, y_results$y_samples[, mc_i])
+        }
+
+        fj_result <- calc_fj(j, y_results$y_samples[, mc_i], sample_weight_mc = 1,
+                             X.pack = NA, X.pack$vj_mat,
+                             alpha, kappa, pvals_obs[j],
+                             statistic, kn_stat_mc, y_results$sigmahat_X_res[mc_i],
+                             cali_with_kn, Rhat_level = 0,
+                             Rhat_max_num, Rhat_calc_max_step)
+
+
+        DP_j_accumulate <- DP_j_accumulate + fj_result$DP_j * step_size
+        b_j_accumulate <- b_j_accumulate + fj_result$b_j * step_size
+
+        if(DP_j_accumulate <= b_j_accumulate) return(j)
+
+        calc_steps_remains <- calc_steps_remains - 1
+        if(calc_steps_remains == 0) break
+      }
+
+      return(NA)
+    }
+  })
+
+  selected <- selected[!is.na(selected)]
+
+  return(list(selected = selected))
+}
+
+
+calc_fj <- function(j, y_mc, sample_weight_mc, X.pack, vj_mat, alpha, kappa,
+                    pval_obs, statistic, kn_stat_mc, sigmahat_X_res_mc,
+                    cali_with_kn = F, Rhat_level = 0,
+                    Rhat_max_num, Rhat_calc_max_step,
+                    cali_var, cali_stat_obs, cali_stat_mc){
+  n <- length(y_mc)
+  p <- length(kn_stat_mc)
+  df <- n - p
+
+  ## compute weights
+  # make rejection and fdp estimation based on knockoff statistics
+  eskn_result <- kn.select(kn_stat_mc, kappa * alpha,
+                         selective = T, early_stop = T)
+  eskn_selected_mc <- eskn_result$selected
+
+  # compute weight
+  kn_null_num <- max(1, (eskn_result$fdp_est * length(eskn_selected_mc)))
+  b_j <- kappa * alpha * (j %in% eskn_selected_mc) / kn_null_num
+
+  ## compute individual FDP contribution (DP_j in the code)
+  # p-values
+  tvals_mc <- y_to_t(y_mc, vj_mat, sigmahat_X_res_mc)
+  pvals_mc <- pvals_t(tvals_mc, df, side = "two")
+
+  # Bonferroni rejections
+  Bonf_selected_mc <- which(pvals_mc <= (1-kappa) * alpha / p)
+
+  # knockoff rejections
+  kn_result <- kn.select(kn_stat_mc, kappa * alpha,
+                         selective = T, early_stop = F)
+  kn_selected_mc <- kn_result$selected
+
+  # R hat
+  selected_mc <- union(kn_selected_mc, Bonf_selected_mc)
+
+  # compute selections by a marginal p-value test
+  # cali_selected_mc <- ifelse(pvals_mc[j] <= pval_obs, j, 0)
+  # cali_selected_mc <- ifelse((pvals_mc[j] <= pval_obs) &&
+  #                            kn_prefer(j, kn_stat_mc, alpha), j, 0)
+
+  if(cali_var == "pval"){
+    if(cali_with_kn){
+      cali_selected_mc <- ifelse((pvals_mc[j] <= pval_obs) &&
+                                   kn_prefer(j, kn_stat_mc, alpha), j, 0)
+    } else{
+      cali_selected_mc <- ifelse(pvals_mc[j] <= pval_obs, j, 0)
+    }
+  } else{
+    cali_selected_mc <- ifelse(cali_stat_mc >= cali_stat_obs, j, 0)
+  }
+
+  if(Rhat_level > 0 && length(union(selected_mc, j)) == 1 &&
+     (j %in% union(kn_selected_mc, cali_selected_mc))){
+    Rhat_recursive <- cknockoff_Rhat(X.pack, y_mc, j,
+                                     kn_stat_mc, tvals_mc,
+                                     statistic,
+                                     alpha,
+                                     kappa,
+                                     cali_with_kn = cali_with_kn,
+                                     Rhat_max_num,
+                                     Rhat_calc_max_step)$selected
+
+    selected_mc <- union(selected_mc, Rhat_recursive)
+    Rhat <- length(union(selected_mc, j))
+  } else{
+    Rhat <- NULL
+  }
+
+  DP_j <- (j %in% union(kn_selected_mc, cali_selected_mc)) / length(union(selected_mc, j))
+
+  fj <- (DP_j - b_j) * sample_weight_mc - (1-kappa) * alpha / p
+
+  return(list(fj = fj, DP_j = DP_j, b_j = b_j, Rhat = Rhat))
+}
+
+
+cali_statasitic <- function(X, X_kn, y, statistic, sigma_tilde, y_fit_noj_all,
+                            type = c("W_abs", "beta_lasso", "LM_lasso")){
+  n <- NROW(X)
+  p <- NCOL(X)
+  if(type == "W_abs"){
+    cali_stat <- abs(statistic(X, X_kn, y, sigma_tilde))
+  } else if(type == "beta_lasso"){
+    lambda <- 2 * sigma_tilde / n
+    fit <- glmnet::glmnet(X, y, lambda=lambda, intercept=T, standardize=F, standardize.response=F, family="gaussian")
+    cali_stat <- abs(as.vector(fit$beta))
+  } else if(type == "LM_lasso"){
+    cali_stat <- rep(NA, p)
+    for(j in 1:p){
+      y_res <- c(y - c(y_fit_noj_all[, j]))
+      cali_stat[j] <- abs(sum(X[, j] * y_res))
+    }
+  }
+
+  return(cali_stat)
+}
+
+
+
+
+
+
+
+

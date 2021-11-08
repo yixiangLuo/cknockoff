@@ -94,3 +94,15 @@ kn.select <- function(kn_statistics, alpha,
 }
 
 
+kn_prefer <- function(j, kn_statistics, alpha, relax_factor = 1.5){
+  p <- length(kn_statistics)
+  prefer <- ((p+1-rank(abs(kn_statistics)))[j] <= 2/alpha * relax_factor)
+  if(!prefer){
+    kn_statistics[j] <- abs(kn_statistics[j])
+    prefer <- (j %in% kn.select(kn_statistics, alpha * relax_factor,
+                                selective = T, early_stop = T)$selected)
+  }
+  return(prefer)
+}
+
+

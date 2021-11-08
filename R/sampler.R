@@ -31,23 +31,23 @@ y_sampler_cond_Sj <- function(sample_size, calib_rej_reg, kn_rej_reg, j,
   if(total_mass == 0){
     return(0)
   }
-  if(rest_mass == 0){
-    return(1)
-  }
+  # if(rest_mass == 0){
+  #   return(1)
+  # }
   if(rej_mass == 0){
     return(-1)
   }
 
-  sample_size <- 2 * ceiling(sample_size / 2)
+  rej_sample_prop <- min(1, ceiling((rej_mass/total_mass * sample_size)) / sample_size)
 
   # sampling in the calibration rejection set and compute the
   # importance sampling weights
-  rej_size <- sample_size / 2
+  rej_size <- round(sample_size * rej_sample_prop)
   if(rej_size > 0){
     rej_p <- runif_intervals(pval_rej_lb, pval_rej_ub, rej_size)
     rej_t <- qt(rej_p, df = df, lower.tail = T)
 
-    rej_weight <- rej_mass * 2
+    rej_weight <- rej_mass / rej_sample_prop
     rej_weights <- rep(rej_weight, rej_size)
   } else{
     rej_t <- NULL
@@ -63,7 +63,7 @@ y_sampler_cond_Sj <- function(sample_size, calib_rej_reg, kn_rej_reg, j,
     rest_p <- runif_intervals(pval_rest_lb, pval_rest_ub, rest_size)
     rest_t <- qt(rest_p, df = df, lower.tail = T)
 
-    rest_weight <- rest_mass * 2
+    rest_weight <- rest_mass / (1 - rej_sample_prop)
     rest_weights <- rep(rest_weight, rest_size)
   } else{
     rest_t <- NULL
@@ -71,13 +71,102 @@ y_sampler_cond_Sj <- function(sample_size, calib_rej_reg, kn_rej_reg, j,
     rest_weights <- NULL
   }
 
-  # interweave the samples so that they are in pairs in the resulting sequence of samples
-  interweave <- c(seq(from = 1, to = sample_size-1, length.out = sample_size/2),
-                  seq(from = 2, to = sample_size, length.out = sample_size/2))
-  sample_t <- rep(NA, sample_size)
-  sample_t[interweave] <- c(rej_t, rest_t)
-  sample_weights <- rep(NA, sample_size)
-  sample_weights[interweave] <- c(rej_weights, rest_weights)
+  # randomly shuffle the samples
+  if(sample_size > 1){
+    shuffle <- c(1, sample(2:sample_size)) # make sure at least one sample from rej_set is seen
+    sample_t <- c(rej_t, rest_t)[shuffle]
+    sample_weights <- c(rej_weights, rest_weights)[shuffle]
+  }
+
+
+  # convert the samples of T_j to response vector y
+  sample_vjy <- tj_to_vjy(sample_t, y_Pi_Xnoj_res_norm2, df)
+  y_results <- vjy_to_y(sample_vjy, j, y.pack, X.pack)
+
+  return(list(y_samples = y_results$y_samples, sample_weights = sample_weights,
+              weights = list(rej_weight = rej_weight, rest_weight = rest_weight),
+              sigmahat_X_res = y_results$sigmahat_X_res,
+              sigmahat_XXk_res = y_results$sigmahat_XXk_res))
+}
+
+# sampling from the p-value (calibration) rejection set union the knockoff rejection set
+y_sampler_cond_Sj_newCali <- function(sample_size, calib_rej_reg, kn_rej_reg, j,
+                                      y.pack, X.pack){
+  df <- y.pack$df
+  y_Pi_Xnoj_res_norm2 <- y.pack$y_Pi_Xnoj_res_norm2[j]
+
+  # mass of calibration rejection set
+  rej_set <- interval_union(calib_rej_reg, kn_rej_reg)
+  if(!is.null(rej_set$left)){
+    pval_rej_lb <- pt(rej_set$left, df = df, lower.tail = T)
+    pval_rej_ub <- pt(rej_set$right, df = df, lower.tail = T)
+    rej_mass <- sum(pval_rej_ub - pval_rej_lb)
+  } else{
+    rej_mass <- 0
+  }
+
+  # mass of (kn rejection set) - (calibration rejection set)
+  rej_bound <- ifelse(rej_mass > 0, max(abs(rej_set$left), abs(rej_set$right)), 0)
+  t_bound <- max(abs(qt(1e-14, df = df)), rej_bound)
+  rest_set <- interval_complement(rej_set, univ_left = -t_bound, univ_right = t_bound)
+  if(!is.null(rest_set$left)){
+    pval_rest_lb <- pt(rest_set$left, df = df, lower.tail = T)
+    pval_rest_ub <- pt(rest_set$right, df = df, lower.tail = T)
+    rest_mass <- sum(pval_rest_ub - pval_rest_lb)
+  } else{
+    rest_mass <- 0
+  }
+
+  total_mass <- rej_mass + rest_mass
+
+  # can decide rejecting H_j or not based on the mass of the two sets
+  if(total_mass == 0){
+    return(0)
+  }
+  if(rej_mass == 0){
+    return(1)
+  }
+
+  rej_sample_prop <- min(1, ceiling((max(rej_mass/total_mass, 0.8) * sample_size)) / sample_size)
+
+  # sampling in the calibration rejection set and compute the
+  # importance sampling weights
+  rej_size <- round(sample_size * rej_sample_prop)
+  if(rej_size > 0){
+    rej_p <- runif_intervals(pval_rej_lb, pval_rej_ub, rej_size)
+    rej_t <- qt(rej_p, df = df, lower.tail = T)
+
+    rej_weight <- rej_mass / rej_sample_prop
+    rej_weights <- rep(rej_weight, rej_size)
+  } else{
+    rej_t <- NULL
+    rej_weight <- 0
+    rej_weights <- NULL
+  }
+
+
+  # sampling in (kn rejection set) - (calibration rejection set) and compute the
+  # importance sampling weights
+  rest_size <- sample_size - rej_size
+  if(rest_size > 0){
+    rest_p <- runif_intervals(pval_rest_lb, pval_rest_ub, rest_size)
+    rest_t <- qt(rest_p, df = df, lower.tail = T)
+
+    rest_weight <- rest_mass / (1 - rej_sample_prop)
+    rest_weights <- rep(rest_weight, rest_size)
+  } else{
+    rest_t <- NULL
+    rest_weight <- 0
+    rest_weights <- NULL
+  }
+
+  # randomly shuffle the samples
+  if(sample_size > 1){
+    shuffle <- sample(1:sample_size)
+    sample_t <- c(rej_t, rest_t)[shuffle]
+    sample_weights <- c(rej_weights, rest_weights)[shuffle]
+  }
+
 
   # convert the samples of T_j to response vector y
   sample_vjy <- tj_to_vjy(sample_t, y_Pi_Xnoj_res_norm2, df)
@@ -112,13 +201,16 @@ where_pval_rej <- function(j, y.pack){
 # approximately find the the set of tval[j] (and vj*y) where knockoff reject j conditional on Sj
 where_kn_rej <- function(kn_alpha, j, y.pack, X.pack,
                          statistic,
-                         method = "local_lin_reg"){
+                         method = "local_lin_reg",
+                         kn_stat_samples = NULL){
   df <- y.pack$df
   y_Pi_Xnoj_res_norm2 <- y.pack$y_Pi_Xnoj_res_norm2[j]
 
   # find the approximated knockoff rejection region in vjy
-  kn_stat_samples <- kn_stat_sampling(kn_alpha, j, y.pack, X.pack, node_num = 10,
-                                      statistic)
+  if(is.null(kn_stat_samples)){
+    kn_stat_samples <- kn_stat_sampling(kn_alpha, j, y.pack, X.pack, node_num = 10,
+                                        statistic)
+  }
 
   vjy_region <- region_F1geqF2(kn_stat_samples$vjy_nodes,
                                kn_stat_samples$kn_abs_stat_j,
@@ -148,6 +240,17 @@ where_kn_rej <- function(kn_alpha, j, y.pack, X.pack,
     left_t <- vjy_to_tj(left_vjy, y_Pi_Xnoj_res_norm2, df)
     right_t <- vjy_to_tj(right_vjy, y_Pi_Xnoj_res_norm2, df)
 
+
+    t_bound <- abs(qt(1e-14, df = df))
+    boundary_t <- vjy_to_tj(c(kn_stat_samples$vjy_nodes[1], kn_stat_samples$vjy_nodes[length(kn_stat_samples$vjy_nodes)]), y_Pi_Xnoj_res_norm2, df)
+    if(left_t[1] <= min(boundary_t)+1e-7){
+      left_t[1] <- min(left_t[1], -t_bound)
+    }
+    if(right_t[length(right_t)] >= max(boundary_t)-1e-7){
+      right_t[length(right_t)] <- max(right_t[length(right_t)], t_bound)
+    }
+
+
   } else{
     left_vjy <- NULL
     right_vjy <- NULL
@@ -168,7 +271,7 @@ kn_stat_sampling <- function(kn_alpha, j, y.pack, X.pack, node_num = 10,
   vjy_obs <- y.pack$vjy_obs[j]
 
   # compute the bounds of the finite interval to interpolate/LLR
-  tj_bound <- qt(1e-3, df = df, lower.tail = F)
+  tj_bound <- qt(5e-3, df = df, lower.tail = F)
   vjy_bound <- max(abs(tj_to_vjy(tj_bound, y_Pi_Xnoj_res_norm2, df)), abs(vjy_obs))
   vjy_nodes <- seq(-vjy_bound, vjy_bound, length.out = node_num)
 
@@ -196,7 +299,7 @@ kn_stat_sampling <- function(kn_alpha, j, y.pack, X.pack, node_num = 10,
               kn_stat_thrs = kn_stat_thrs))
 }
 
-region_F1geqF2 <- function(x, y1, y2, method){
+region_F1geqF2 <- function(x, y1, y2, method, n_eval = 100){
   # linear interpolation
   if(method == "lin_interp"){
     int_num = length(x) - 1 # number of intervals given by the interpolation
@@ -230,11 +333,18 @@ region_F1geqF2 <- function(x, y1, y2, method){
   else if(method == "local_lin_reg"){
     bandwidth <- max(abs(diff(x)))    # set the band width as the distance between nodes
     x_range <- c(min(x), max(x))
-    n_eval <- 100
+    n_eval <- n_eval
 
     # local linear regression with Gaussian kernel
-    F1 <- KernSmooth::locpoly(x, y1, bandwidth = bandwidth, degree = 1, gridsize = n_eval, range.x = x_range)
-    F2 <- KernSmooth::locpoly(x, y2, bandwidth = bandwidth*2, degree = 1, gridsize = n_eval, range.x = x_range)
+    tryCatch(
+      {
+        F1 <- KernSmooth::locpoly(x, y1, bandwidth = bandwidth, degree = 1, gridsize = n_eval, range.x = x_range)
+        F2 <- KernSmooth::locpoly(x, y2, bandwidth = bandwidth*2, degree = 1, gridsize = n_eval, range.x = x_range)
+      },
+      error = function(error_message){
+        browser()
+      }
+    )
 
     # find the desired region
     F1geqF2 <- F1$y >= F2$y
@@ -248,6 +358,98 @@ region_F1geqF2 <- function(x, y1, y2, method){
 
   return(list(left = left, right = right))
 }
+
+
+# approximately find the the set of tval[j] (and vj*y) where knockoff reject j conditional on Sj
+where_cali_rej <- function(j, y.pack, X.pack, statistic,
+                           method = "local_lin_reg", cali_var, cali_thr,
+                           cali_stat_samples = NULL, y_fit_noj_all){
+  df <- y.pack$df
+  y_Pi_Xnoj_res_norm2 <- y.pack$y_Pi_Xnoj_res_norm2[j]
+
+  # find the approximated knockoff rejection region in vjy
+  if(is.null(cali_stat_samples)){
+    cali_stat_samples <- cali_stat_sampling(j, y.pack, X.pack, node_num = 10, statistic,
+                                            cali_var, y_fit_noj_all)
+  }
+
+  vjy_region <- region_F1geqF2(cali_stat_samples$vjy_nodes,
+                               cali_stat_samples$cali_stat,
+                               y2 = rep(cali_thr - 0.1*abs(cali_thr), 10),
+                               method, n_eval = 100)
+  left_vjy <- vjy_region$left
+  right_vjy <- vjy_region$right
+
+  # reorganize the results
+  if(length(left_vjy)>0){
+    # concatenate continuous intervals
+    left <- left_vjy[1]
+    right <- NULL
+    if(length(left_vjy) >= 2){
+      for(i in 1:(length(left_vjy)-1)){
+        if(right_vjy[i] != left_vjy[i+1]){
+          right <- c(right, right_vjy[i])
+          left <- c(left, left_vjy[i+1])
+        }
+      }
+    }
+    right <- c(right, tail(right_vjy, 1))
+    left_vjy <- left
+    right_vjy <- right
+
+    # convert vjy to t-val
+    left_t <- vjy_to_tj(left_vjy, y_Pi_Xnoj_res_norm2, df)
+    right_t <- vjy_to_tj(right_vjy, y_Pi_Xnoj_res_norm2, df)
+
+
+    t_bound <- abs(qt(1e-14, df = df))
+    boundary_t <- vjy_to_tj(c(cali_stat_samples$vjy_nodes[1], cali_stat_samples$vjy_nodes[length(cali_stat_samples$vjy_nodes)]), y_Pi_Xnoj_res_norm2, df)
+    if(left_t[1] <= min(boundary_t)+1e-7){
+      left_t[1] <- min(left_t[1], -t_bound)
+    }
+    if(right_t[length(right_t)] >= max(boundary_t)-1e-7){
+      right_t[length(right_t)] <- max(right_t[length(right_t)], t_bound)
+    }
+
+
+  } else{
+    left_vjy <- NULL
+    right_vjy <- NULL
+    left_t <- NULL
+    right_t <- NULL
+  }
+
+  rej_set <- list(left = left_t, right = right_t,
+                  left_vjy = left_vjy, right_vjy = right_vjy)
+}
+
+# generating nodes on vj*y. Compute the kn-stat Wj and the kn-rejection lower
+# bound W_{(\hat k)} on the them.
+cali_stat_sampling <- function(j, y.pack, X.pack, node_num = 10, statistic, cali_var, y_fit_noj_all){
+  df <- y.pack$df
+  y_Pi_Xnoj_res_norm2 <- y.pack$y_Pi_Xnoj_res_norm2[j]
+  vjy_obs <- y.pack$vjy_obs[j]
+
+  # compute the bounds of the finite interval to interpolate/LLR
+  tj_bound <- qt(5e-3, df = df, lower.tail = F)
+  vjy_bound <- max(abs(tj_to_vjy(tj_bound, y_Pi_Xnoj_res_norm2, df)), abs(vjy_obs))
+  vjy_nodes <- seq(-vjy_bound, vjy_bound, length.out = node_num)
+
+  y_results <- vjy_to_y(vjy_nodes, j, y.pack, X.pack)
+  y_nodes <- y_results$y_samples
+
+  # compute the kn-stat Wj, the kn-rejection lower bound W_{(hat k)} on the nodes
+  cali_stat <- rep(NA, node_num)
+  for(node_i in 1:node_num){
+    cali_stat[node_i] <- cali_statasitic(X.pack$X, X.pack$X_kn, y_nodes[, node_i],
+                                         statistic, sigma_tilde = y_results$sigmahat_XXk_res[node_i],
+                                         y_fit_noj_all, type = cali_var)[j]
+  }
+
+  # return the values
+  return(list(vjy_nodes = vjy_nodes, cali_stat = cali_stat))
+}
+
 
 
 vjy_to_tj <- function(vjy, y_Pi_Xnoj_res_norm2, df){

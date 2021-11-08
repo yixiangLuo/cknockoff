@@ -41,8 +41,9 @@ m_in_HCS <- function(X_seq, m, alpha = 0.05, c = 1/2, theta = 1/2, lambdas_deno 
 
 # the lower and upper bound of the LHS of the inequality
 get_ineq_bound <- function(kappa, alpha, p, weights){
-  upper <- 1 * weights$rej_weight/2 - (1-kappa) * alpha / p
-  lower <- (1/p * weights$rej_weight/2 -  kappa * alpha * weights$rest_weight/2) - (1-kappa) * alpha / p
+  upper <- max(1 * weights$rej_weight, 0 * weights$rest_weight) - (1-kappa) * alpha / p
+  lower <- min((1/p - kappa * alpha) * weights$rej_weight,
+               (- kappa * alpha) * weights$rest_weight) - (1-kappa) * alpha / p
 
   bounds <- list(upper = upper, lower = lower)
 

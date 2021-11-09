@@ -669,7 +669,7 @@ calc_fj <- function(j, y_mc, sample_weight_mc, X.pack, vj_mat, alpha, kappa,
 
 
 cali_statasitic <- function(X, X_kn, y, statistic, sigma_tilde, y_fit_noj_all,
-                            type = c("W_abs", "beta_lasso", "LM_lasso")){
+                            type = c("W_abs", "beta_lasso", "LM_lasso", "Xy")){
   n <- NROW(X)
   p <- NCOL(X)
   if(type == "W_abs"){
@@ -684,6 +684,8 @@ cali_statasitic <- function(X, X_kn, y, statistic, sigma_tilde, y_fit_noj_all,
       y_res <- c(y - c(y_fit_noj_all[, j]))
       cali_stat[j] <- abs(sum(X[, j] * y_res))
     }
+  } else if(type == "Xy"){
+    cali_stat <- abs(c(t(X) %*% y))
   }
 
   return(cali_stat)

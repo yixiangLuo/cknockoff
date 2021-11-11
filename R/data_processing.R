@@ -1,5 +1,5 @@
 parse_args <- function(X, y, knockoffs, statistic,
-                       alpha, kappa, n_cores, knockoff.type,
+                       alpha, n_cores, knockoff.type,
                        prelim_result, X.pack, envir){
 
   if(is(prelim_result, "cknockoff.result")){
@@ -8,7 +8,6 @@ parse_args <- function(X, y, knockoffs, statistic,
     knockoffs <- prelim_result$Xk
     statistic <- prelim_result$record$statistic
     alpha <- prelim_result$record$alpha
-    kappa <- prelim_result$record$kappa
     X.pack <- prelim_result$record$X.pack
     record <- c(prelim_result$record[c("iteration", "kn.selected",
                                        "checked_so_far", "next_check_num")],
@@ -23,7 +22,6 @@ parse_args <- function(X, y, knockoffs, statistic,
     X <- prelim_result$X
     y <- prelim_result$y
     knockoffs <- prelim_result$Xk
-    kappa <- 1
     # X.pack <- NULL
     record <- list(iteration = 0,
                    kn.statistic = prelim_result$statistic,
@@ -75,7 +73,7 @@ parse_args <- function(X, y, knockoffs, statistic,
   }
 
   return(list(X = X, y = y, knockoffs = knockoffs, statistic = statistic,
-              alpha = alpha, kappa = kappa, n_cores = n_cores, X.pack = X.pack,
+              alpha = alpha, n_cores = n_cores, X.pack = X.pack,
               record = record))
 }
 
@@ -101,10 +99,6 @@ check_args <- function(args){
 
   if(!is.numeric(args$alpha) || (args$alpha < 0 || args$alpha > 1)){
     stop("alpha must be a number between 0 and 1.")
-  }
-
-  if(!is.numeric(args$kappa) || (args$kappa < 0 || args$kappa > 1)){
-    stop("kappa must be a number between 0 and 1.")
   }
 
   if(!is.integer(args$n_cores) || args$n_cores <= 0){
@@ -355,10 +349,13 @@ process_y <- function(X.pack, y, randomize = F){
   y_Pi_Xnoj_res_norm2 <- y_Pi_X_res_norm2 + vjy_obs^2
   sigmahat_XXk_res <- sqrt((y_Pi_X_res_norm2 - sum((y %*% X.pack$X_res_Xk_basis)^2)) / (n - 2*p))
 
+  Xy_bias <- rep(NA, p)
+
   return(list(n = n, p = p, df = df, y = as.vector(y), vjy_obs = vjy_obs,
               y_Pi_X_res_norm2 = y_Pi_X_res_norm2, y_Pi_Xnoj_res_norm2 = y_Pi_Xnoj_res_norm2,
               sigmahat_XXk_res = sigmahat_XXk_res,
-              y_Pi_Xnoj = y_Pi_Xnoj))
+              y_Pi_Xnoj = y_Pi_Xnoj,
+              Xy_bias = Xy_bias))
 }
 
 process_parallel <- function(n_cores){

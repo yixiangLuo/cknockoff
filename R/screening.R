@@ -25,13 +25,13 @@ qvals_BH <- function(pvals){
 }
 
 # pick the promising features from the unchecked ones
-cKn_candidates <- function(kn.stats, pvals, alpha, record, selected, cali_with_kn = F){
+cKn_candidates <- function(kn.stats, pvals, alpha, record, selected){
   # when cknockoff is run the first time
   if(is.null(record) || record$iteration == 0) {
     # pick those selected by BH and having small p-values
     candidates <- intersect(which(pvals <= alpha/2), BH_weighted(pvals, 4*alpha)$rejs)
     # pick those having large knockoff W-statistics (in absolute value)
-    kn_cand_num <- max(1, length(candidates), sum(abs(kn.stats) >= kn.select(kn.stats, 1.5*alpha)$W_k_hat))
+    kn_cand_num <- max(1, length(candidates), sum(abs(kn.stats) >=  kn.select(kn.stats, 1.5*alpha)$W_k_hat))
     candidates <- union(candidates, order(abs(kn.stats), decreasing = T)[1:kn_cand_num])
     candidates <- setdiff(candidates, selected)
   }
@@ -54,14 +54,12 @@ cKn_candidates <- function(kn.stats, pvals, alpha, record, selected, cali_with_k
     }
   }
 
-  if(cali_with_kn){
-    candidates <- sapply(candidates, function(candidate){
-      prefer <- kn_prefer(candidate, kn.stats, alpha)
-      if(prefer) return(candidate)
-      else return(NA)
-    })
-    candidates <- candidates[!is.na(candidates)]
-  }
+  # candidates <- sapply(candidates, function(candidate){
+  #   prefer <- kn_prefer(candidate, kn.stats, alpha)
+  #   if(prefer) return(candidate)
+  #   else return(NA)
+  # })
+  # candidates <- candidates[!is.na(candidates)]
 
   return(candidates)
 }

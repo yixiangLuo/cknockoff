@@ -886,14 +886,15 @@ hist(mc_sample_size_before_stop, breaks = 100)
 p <- 100; n <- 300; k <- 15
 X <- matrix(rnorm(n*p), n)
 nonzero <- sample(p, k)
-beta <- 0.5 * (1:p %in% nonzero)
+beta <- 3.5 * (1:p %in% nonzero)
 y <- X %*% beta + rnorm(n)
 print(which(1:p %in% nonzero))
 
 # Basic usage
-result <- cknockoff(X, y, alpha = 0.05, n_cores = 1, cali_var = "pval")
+result <- cknockoff(X, y, alpha = 0.05, n_cores = 1)
 print(result$selected)
-result <- cknockoff(X, y, alpha = 0.05, n_cores = 1, cali_var = "LM_lasso")
+
+result <- cknockoff(X, y, alpha = 0.05, n_cores = 1, Rhat_level = 1)
 print(result$selected)
 
 ```

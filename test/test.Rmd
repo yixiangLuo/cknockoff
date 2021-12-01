@@ -134,14 +134,15 @@ y_condj_sample <- function(y, X, j, sample_size, seed = 1, q_cap = Inf){
 
 # cKnockoff for a particular y and and j
 cKnockoff_j <- function(y, X, X.pack,
-                        alpha = 0.2, kappa = 1,
+                        alpha = 0.2,
                         H0, seed = 1, mc_size = 100,
-                        invest_mode = T, invest_j = NULL,
-                        sample_type = "random", naive_sampler = T,
+                        invest_j = NULL,
+                        naive_sampler = T,
                         kn_reg_method = "local_lin_reg",
-                        statistic, cali_var = "pval"){
+                        statistic){
     # X <- X_invest
     # y <- y_invest
+    invest_mode <- T
 
     j <- invest_j
 
@@ -165,17 +166,9 @@ cKnockoff_j <- function(y, X, X.pack,
 
     ineq_LR <- matrix(rep(0, 2*mc_size), 2)
     
-    cali_stats_obs <- rep(NA, p)
-    y_fit_noj_all <- matrix(NA, nrow = n, ncol = p)
-    if(cali_var != "pval"){
-      if(cali_var == "LM_lasso"){
-        fit <- glmnet::glmnet(X[, -j], y, lambda=2*y.pack$sigmahat_XXk_res/n, intercept=T, standardize=F, standardize.response=F, family="gaussian")
-        y_fit_noj_all[, j] <- as.vector(X[, -j] %*% fit$beta + rep(fit$a0, each = n))
-      }
-      cali_stats_obs <- cali_statasitic(X.pack$X, X.pack$X_kn, y,
-                                        statistic, sigma_tilde = y.pack$sigmahat_XXk_res,
-                                        y_fit_noj_all, type = cali_var)
-    }
+    fit_on_rest <- glmnet::glmnet(X[, -j], y, lambda = 2 * y.pack$sigmahat_XXk_res/n, intercept=T, standardize=F, standardize.response=F, family="gaussian")
+    y.pack$Xy_bias[j] <- t(X[, j]) %*% (X[, -j] %*% fit_on_rest$beta + rep(fit_on_rest$a0, each = n))
+    cali_stats_obs <- abs(c(matrix(y, nrow = 1) %*% X) - y.pack$Xy_bias)
 
     # for investing
     if(invest_mode){
@@ -187,12 +180,12 @@ cKnockoff_j <- function(y, X, X.pack,
         kn_stats_mc <- matrix(NA, mc_size, p)
         eskn_rej_mc <- matrix(NA, mc_size, p)
         vjy_mc <- rep(NA, mc_size)
-        SRL_est_mc <- rep(NA, mc_size)
+        # SRL_est_mc <- rep(NA, mc_size)
         kn_stat_thres <- rep(NA, mc_size)
-        pi0_mc <- rep(NA, mc_size)
-        Rkn_mc <- rep(NA, mc_size)
-        Reskn_mc <- rep(NA, mc_size)
-        qval_invest <- pval_obs
+        # pi0_mc <- rep(NA, mc_size)
+        # Rkn_mc <- rep(NA, mc_size)
+        # Reskn_mc <- rep(NA, mc_size)
+        # qval_invest <- pval_obs
         y_Pi_Xk1_mc <- rep(NA, mc_size)
         pval_mc <- rep(NA, mc_size)
         weights_mc <- NULL
@@ -201,12 +194,10 @@ cKnockoff_j <- function(y, X, X.pack,
 
     # knockoff and dBY rejection
     kn_stats_obs <- statistic(X, X.pack$X_kn, y, sigma_tilde = y.pack$sigmahat_XXk_res)
-    kn_selected <- kn.select(kn_stats_obs, kappa * alpha,
+    kn_selected <- kn.select(kn_stats_obs, alpha,
                               selective = T, early_stop = 0)$selected
 
-    Bonf_selected <- which(pvals_obs <= (1-kappa) * alpha / p)
-
-    init_selected <- j %in% union(kn_selected, Bonf_selected)
+    init_selected <- j %in% kn_selected
 
 
     ## Monte Carlo sample for RB
@@ -218,58 +209,27 @@ cKnockoff_j <- function(y, X, X.pack,
     }
 
     # rejection region of the new sampler
-    kn_stat_nodes <- kn_stat_sampling(kappa * alpha, j, y.pack,
-                                      X.pack = list(X = X.pack$X, X_kn = X.pack$X_kn,
-                                                    vj = X.pack$vj_mat[, j],
-                                                    X_res_Xk_basis = X.pack$X_res_Xk_basis,
-                                                    XXk_res_unit = X.pack$XXk_res_unit),
+    kn_stat_nodes <- kn_stat_sampling(alpha, j, y.pack, X.pack,
                                       node_num = 10,
                                       statistic)
-    kn_rej_set <- where_kn_rej(kappa * alpha, j, y.pack,
+    kn_rej_set <- where_kn_rej(alpha, j, y.pack,
                                X.pack = NULL,
                                statistic, method = kn_reg_method,
                                kn_stat_samples = kn_stat_nodes)
     
-    if(cali_var != "pval"){
-      cali_thr <- cali_stats_obs[j]
-      cali_stat_samples <- cali_stat_sampling(j, y.pack,
-                                              X.pack = list(X = X.pack$X, X_kn = X.pack$X_kn,
-                                                   vj = X.pack$vj_mat[, j],
-                                                   X_res_Xk_basis = X.pack$X_res_Xk_basis,
-                                                   XXk_res_unit = X.pack$XXk_res_unit),
-                                              node_num = 10,
-                                              statistic = statistic,
-                                              cali_var = cali_var,
-                                              y_fit_noj_all = y_fit_noj_all)
-      cali_rej_set <- where_cali_rej(j, y.pack,
-                                     X.pack = NA,
-                                     statistic,
-                                     method = kn_reg_method, cali_var,
-                                     cali_thr = cali_thr,
-                                     cali_stat_samples = cali_stat_samples,
-                                     y_fit_noj_all = NA)
-      
-      kn_stat_nodes <- list(vjy_nodes = cali_stat_samples$vjy_nodes,
-                            kn_abs_stat_j = cali_stat_samples$cali_stat,
-                            kn_stat_thrs = rep(cali_thr, 10))
-      kn_rej_set <- cali_rej_set
-    }
     
-    pval_rej_set <- where_pval_rej(j, y.pack)
-    sample_region <- interval_union(kn_rej_set, pval_rej_set)
+    cali_rej_set <- where_cali_rej(j, y.pack, X.pack)
+    sample_region <- interval_union(kn_rej_set, cali_rej_set)
 
-    sample_res <- y_sampler_cond_Sj(mc_size, pval_rej_set, kn_rej_set, j,
-                                    y.pack,
-                                    X.pack = list(vj = X.pack$vj_mat[, j],
-                                                   X_res_Xk_basis = X.pack$X_res_Xk_basis,
-                                                   XXk_res_unit = X.pack$XXk_res_unit))
+    sample_res <- y_sampler_cond_Sj(mc_size, cali_rej_set, kn_rej_set, j,
+                                    y.pack, X.pack)
     if(!naive_sampler){
         y_cond <- sample_res$y_samples
         sample_weights <- sample_res$sample_weights
         sigmahat_X_res <- sample_res$sigmahat_X_res
         sigmahat_XXk_res <- sample_res$sigmahat_XXk_res
 
-        ineq_bounds <- get_ineq_bound(kappa, alpha, p, sample_res$weights)
+        ineq_bounds <- get_ineq_bound(alpha, p, sample_res$weights)
     }
 
     if(invest_mode){
@@ -286,34 +246,30 @@ cKnockoff_j <- function(y, X, X.pack,
         ## compute weights
         # make rejection and fdp estimation based on knockoff statistics
         # selective SeqStep: selective = TRUE; SeqStep: selective = FALSE
-        kn_result <- kn.select(kn_stats, kappa * alpha,
+        kn_result <- kn.select(kn_stats, alpha,
                                 selective = T, early_stop = 1)
-        kn_selected_RB <- kn_result$selected
+        kn_selected_mc <- kn_result$selected
 
         # compute weight
-        kn_null_num <- (kn_result$fdp_est * length(kn_selected_RB)) %>% max(1)
-        w_tilde <- (j %in% kn_selected_RB) / kn_null_num * kappa
+        kn_null_num <- (kn_result$fdp_est * length(kn_selected_mc)) %>% max(1)
+        w_tilde <- (j %in% kn_selected_mc) / kn_null_num
 
         # for investing
         if(invest_mode){
-            eskn_rej_mc[mc_i, ] <- (1:p) %in% kn_selected_RB
+            eskn_rej_mc[mc_i, ] <- (1:p) %in% kn_selected_mc
             kn_stat_thres[mc_i] <- kn_result$W_k_hat
-            pi0_mc[mc_i] <- kn_result$fdp_est
-            Reskn_mc[mc_i] <- length(kn_selected_RB)
-            
-            if(cali_var != "pval"){
-              kn_stat_thres[mc_i] <- NA
-            }
+            # pi0_mc[mc_i] <- kn_result$fdp_est
+            # Reskn_mc[mc_i] <- length(kn_selected_mc)
         }
 
         ## compute g*
         # p-values
         if(naive_sampler){
-            tvals_RB <- lm_to_t(y_cond[, mc_i], X)$tvals
+            tvals_mc <- lm_to_t(y_cond[, mc_i], X)$tvals
         } else{
-            tvals_RB <- y_to_t(y_cond[, mc_i], X.pack$vj_mat, sigmahat_X_res[mc_i])
+            tvals_mc <- y_to_t(y_cond[, mc_i], X.pack$vj_mat, sigmahat_X_res[mc_i])
         }
-        pvals_RB <- pvals_t(tvals_RB, df, side = "two")
+        pvals_mc <- pvals_t(tvals_mc, df, side = "two")
         
         if(!naive_sampler && F){
             t_naive <- lm_to_t(y_cond[, mc_i], X)$tvals
@@ -327,76 +283,59 @@ cKnockoff_j <- function(y, X, X.pack,
             browser()
         }
 
-        # Bonferroni rejections
-        Bonf_selected_RB <- which(pvals_RB <= (1-kappa) * alpha / p)
-
         # knockoff rejections
-        kn_result <- kn.select(kn_stats, kappa * alpha,
+        kn_result <- kn.select(kn_stats, alpha,
                                 selective = T, early_stop = 0)
-        kn_selected_RB <- kn_result$selected
-        # for investing
-        if(invest_mode){
-            Rkn_mc[mc_i] <- length(kn_selected_RB)
-        }
+        kn_selected_mc <- kn_result$selected
+        
+        # # for investing
+        # if(invest_mode){
+        #     Rkn_mc[mc_i] <- length(kn_selected_mc)
+        # }
 
         # R hat
-        selected_RB <- union(kn_selected_RB, Bonf_selected_RB)
+        selected_mc <- kn_selected_mc
 
-        # compute marginal selection
-        Mg_selected_RB <- ifelse(pvals_RB[j] <= pval_obs, j, 0)
-        # if(kappa < 1){
-        #   Mg_selected_RB <- ifelse(pvals_RB[j] <= pval_obs, j, 0)
-        # } else{
-        #   Mg_selected_RB <- ifelse((pvals_RB[j] <= pval_obs) &&
-        #                            kn_prefer(j, kn_stats, alpha), j, 0)
-        # }
-        if(cali_var != "pval"){
-          cali_stats_mc <- cali_statasitic(X, X.pack$X_kn, y_cond[, mc_i],
-                                          statistic, sigma_tilde = sigmahat_XXk_res[mc_i],
-                                          y_fit_noj_all, type = cali_var)
-          Mg_selected_RB <- ifelse(cali_stats_mc[j] >= cali_stats_obs[j], j, 0)
-        }
+        # compute calibration selection
+        cali_stat_mc <- abs(sum(X[, j] * y_cond[, mc_i]) - y.pack$Xy_bias[j])
+        cali_selected_mc <- ifelse(cali_stat_mc >= cali_stats_obs[j], j, 0)
 
         # compute g star
-        g_star <- (j %in% union(kn_selected_RB, Mg_selected_RB)) / length(union(selected_RB, j))
+        g_star <- (j %in% union(kn_selected_mc, cali_selected_mc)) / length(union(selected_mc, j))
 
-        ineq_LR[, mc_i] <- c(g_star, w_tilde * alpha) * sample_weights[mc_i] + c(0, 1/p * (1-kappa) * alpha)
+        ineq_LR[, mc_i] <- c(g_star, w_tilde * alpha) * sample_weights[mc_i]
         # for investing
         if(invest_mode){
 
-            pval_invest <- pvals_t(tvals_RB, df, side = "right")
+            pval_invest <- pvals_t(tvals_mc, df, side = "right")
             # if(pval_invest[j] > 0.99) browser()
 
             p_ineq <- add_row(p_ineq,
                               pval = pval_invest[j],
-                              tval = tvals_RB[j],
+                              tval = tvals_mc[j],
                               ineq_L = g_star,
                               # ineq_R = w_tilde * alpha,
-                              ineq_R = (w_tilde + 1/p * (1-kappa)) * alpha,
-                              kn_rej = (j %in% kn_selected_RB),
-                              nokn_rej = (j %in% Mg_selected_RB),
-                              kept = x_in_intervals(tvals_RB[j], sample_region))
+                              ineq_R = w_tilde * alpha,
+                              kn_rej = (j %in% kn_selected_mc),
+                              nokn_rej = (j %in% cali_selected_mc),
+                              kept = x_in_intervals(tvals_mc[j], sample_region))
 
             pval_mat[, mc_i] <- pval_invest
             kn_stats_mc[mc_i, ] <- kn_stats
             vjy_mc[mc_i] <- t(X.pack$vj_mat[, j]) %*% y_cond[, mc_i]
-            SRL_est_mc[mc_i] <- (max(abs(t(Xkn_full) %*% y_cond[, mc_i])) +
-                                     max(abs(t(Xkn_full[, j] %*% y_cond[, mc_i])),
-                                         abs(t(Xkn_full[, j + p] %*% y_cond[, mc_i])))) / 2 / sqrt(n-1)
+            # SRL_est_mc[mc_i] <- (max(abs(t(Xkn_full) %*% y_cond[, mc_i])) +
+            #                          max(abs(t(Xkn_full[, j] %*% y_cond[, mc_i])),
+            #                              abs(t(Xkn_full[, j + p] %*% y_cond[, mc_i])))) / 2 / sqrt(n-1)
 
             y_Pi_Xk1_mc[mc_i] <- sum(y_cond[, mc_i] * Xk_dir)
             pval_mc[mc_i] <- pval_invest[j]
-            
-            if(cali_var != "pval"){
-              kn_stats_mc[mc_i, ] <- cali_stats_mc
-            }
         }
 
         # if(mc_i %% 2 == 0){
         #
-        #     ineq_in_rej <- (p_ineq$ineq_L[1:mc_i] - p_ineq$ineq_R[1:mc_i]) * sample_weights[1:mc_i] - (1-kappa) * alpha / p
+        #     ineq_in_rej <- (p_ineq$ineq_L[1:mc_i] - p_ineq$ineq_R[1:mc_i]) * sample_weights[1:mc_i]
         #     ineq_combine <- (ineq_in_rej[seq(1, mc_i-1, length.out = mc_i/2)] + ineq_in_rej[seq(2, mc_i, length.out = mc_i/2)]) / 2
-        #     ineq_bounds <- get_ineq_bound(kappa, alpha, p, sample_res$weights)
+        #     ineq_bounds <- get_ineq_bound(alpha, p, sample_res$weights)
         #
         #     # make decision
         #     decision <- make_decision(ineq_combine[1:(mc_i/2)], ineq_bounds, threshold = 0,
@@ -411,7 +350,7 @@ cKnockoff_j <- function(y, X, X.pack,
         # }
 
         # # HCS confidence interval
-        # ineq[mc_i] <- (g_star - w_tilde * alpha) * sample_weights[mc_i] - (1-kappa) * alpha / p
+        # ineq[mc_i] <- (g_star - w_tilde * alpha) * sample_weights[mc_i]
         # if(mc_i %% 2 ==0){
         #     ineq_combine <- (ineq[seq(1, mc_i-1, length.out = mc_i/2)] + ineq[seq(2, mc_i, length.out = mc_i/2)]) / 2
         #
@@ -430,12 +369,12 @@ cKnockoff_j <- function(y, X, X.pack,
     })
     inds_in_rej <- which(inds_in_rej)
     num_in_rej <- length(inds_in_rej)
-    ineq_in_rej <- (p_ineq$ineq_L[inds_in_rej] - p_ineq$ineq_R[inds_in_rej]) * sample_weights[inds_in_rej] * num_in_rej / mc_size - (1-kappa) * alpha / p
+    ineq_in_rej <- (p_ineq$ineq_L[inds_in_rej] - p_ineq$ineq_R[inds_in_rej]) * sample_weights[inds_in_rej] * num_in_rej / mc_size
     print(paste0("sample_mass (emp): ", num_in_rej / mc_size))
     print(paste0("ineq: ", mean(ineq_in_rej)))
     if(!naive_sampler){
         ineq_combine <- (ineq_in_rej[seq(1, mc_size-1, length.out = mc_size/2)] + ineq_in_rej[seq(2, mc_size, length.out = mc_size/2)]) / 2
-        ineq_bounds <- get_ineq_bound(kappa, alpha, p, sample_res$weights)
+        ineq_bounds <- get_ineq_bound(alpha, p, sample_res$weights)
         print(paste0("outside_bound: ", sum((ineq_combine > ineq_bounds$upper) | (ineq_combine < ineq_bounds$lower))))
     }
 
@@ -445,11 +384,12 @@ cKnockoff_j <- function(y, X, X.pack,
 
     return(list(p_ineq = p_ineq, pval_mat = pval_mat, kn_stats_mc = kn_stats_mc,
                 eskn_rej_mc = eskn_rej_mc, vjy_mc = vjy_mc,
-                SRL_est_mc = SRL_est_mc, kn_stat_thres = kn_stat_thres,
-                qval_invest = qval_invest, sample_weights = sample_weights,
-                pi0_mc = pi0_mc, Rkn_mc = Rkn_mc, Reskn_mc = Reskn_mc,
-                init_selected = init_selected, ineq_selected = ineq_selected,
-                kn_rej_set = kn_rej_set, nokn_rej_reg = pval_rej_set,
+                # SRL_est_mc = SRL_est_mc,
+                kn_stat_thres = kn_stat_thres, sample_weights = sample_weights,
+                # qval_invest = qval_invest, 
+                # pi0_mc = pi0_mc, Rkn_mc = Rkn_mc, Reskn_mc = Reskn_mc,
+                # init_selected = init_selected, ineq_selected = ineq_selected,
+                kn_rej_set = kn_rej_set, cali_rej_set = cali_rej_set,
                 sample_region = sample_region,
                 kn_stat_nodes = kn_stat_nodes,
                 y_Pi_Xk1_mc = y_Pi_Xk1_mc, pval_mc = pval_mc,
@@ -457,9 +397,9 @@ cKnockoff_j <- function(y, X, X.pack,
 }
 
 # similar to get_fdp_power(), but call dKnockoff_j() for investigation
-invest_ineq <- function(n, p, mc_size, X_type, target, alpha, alt_num, kappa,
-                        y_seed, invest_j, import_ratio = NULL,
-                        sample_type = "random", naive_sampler = T,
+invest_ineq <- function(n, p, mc_size, X_type, target, alpha, alt_num,
+                        y_seed, invest_j,
+                        naive_sampler = T,
                         kn_reg_method = "local_lin_reg",
                         statistic = stat.glmnet_coefdiff_lm,
                         cali_var = "pval",
@@ -494,13 +434,13 @@ invest_ineq <- function(n, p, mc_size, X_type, target, alpha, alt_num, kappa,
     y <- X %*% beta + rnorm(n)
 
     ineq_invest <- cKnockoff_j(y, X, X.pack,
-                               alpha = alpha, kappa = kappa,
+                               alpha = alpha,
                                H0, seed = y_seed+100,
                                mc_size = mc_size,
-                               invest_mode = T, invest_j = invest_j,
-                               sample_type = sample_type, naive_sampler = naive_sampler,
+                               invest_j = invest_j,
+                               naive_sampler = naive_sampler,
                                kn_reg_method = kn_reg_method,
-                               statistic = statistic, cali_var = cali_var)
+                               statistic = statistic)
 
 
     rejected <- sum((ineq_invest$p_ineq$ineq_L - ineq_invest$p_ineq$ineq_R) *
@@ -564,6 +504,17 @@ gene_X <- function(X_type = "IID_Normal", n, p, X_seed = 1){
             basis <- qr.Q(qr(matrix(rnorm(n*p), n)))
             X <- basis %*% R
         }
+    } else if(X_type == "MCC_Block"){
+        block_size <- 5
+        
+        blockSigma <- matrix(-1/block_size, block_size, block_size)
+        diag(blockSigma) <- 1
+        
+        cov_mat <- as.matrix(diag(p / block_size) %x% blockSigma)
+        
+        R <- chol(cov_mat)
+        basis <- qr.Q(qr(matrix(rnorm(n*p), n)))
+        X <- basis %*% R
     }
     # X <- scale(X, center = FALSE, scale = sqrt(colSums(X^2)))
 
@@ -745,26 +696,26 @@ draw_kn_stat <- function(ineq_invest, invest_j, SRL = F){
         ggplot(aes(x = yvj , y = abs(kn_stat), group = hypo, color = this_j)) +
         geom_line(alpha = 0.5, aes(size = this_j)) +
         scale_size_manual(values = c(0, 1), breaks = c(F, T)) +
-        # geom_point(aes(alpha = eskn_rej)) +
-        # scale_alpha_manual(values = c(0, 1), breaks = c(F, T)) +
+        geom_point(aes(alpha = eskn_rej)) +
+        scale_alpha_manual(values = c(0, 1), breaks = c(F, T)) +
         geom_line(data = data.frame(vjy = F1$x,
-                                    value = abs(F1$y),
+                                    value = (F1$y),
                                     hypo = invest_j,
                                     this_j = T), aes(x = vjy, y = value), color = "black") +
         geom_point(data = data.frame(vjy = x,
-                                     value = abs(y1),
+                                     value = (y1),
                                      hypo = invest_j,
                                      this_j = T), aes(x = vjy, y = value), color = "black") +
         geom_line(data = data.frame(vjy = F2$x,
-                                    value = abs(F2$y),
+                                    value = (F2$y),
                                     hypo = invest_j,
                                     this_j = T), aes(x = vjy, y = value), color = "blue") +
-        # geom_point(data = data.frame(vjy = x,
-        #                              value = abs(y2),
-        #                              hypo = invest_j,
-        #                              this_j = T), aes(x = vjy, y = value), color = "blue") +
+        geom_point(data = data.frame(vjy = x,
+                                     value = (y2),
+                                     hypo = invest_j,
+                                     this_j = T), aes(x = vjy, y = value), color = "blue") +
         geom_line(data = data.frame(vjy = ineq_invest$vjy_mc,
-                                    kn_stat_thres = abs(ineq_invest$kn_stat_thres),
+                                    kn_stat_thres = (ineq_invest$kn_stat_thres),
                                     hypo = invest_j,
                                     this_j = T), aes(x = vjy, y = kn_stat_thres), color = "blue")
 }
@@ -830,13 +781,11 @@ invest_j <- 21
 #31, 6
 
 ineq_invest <- invest_ineq(n, p, mc_size, X_type = "MCC", target, alpha,
-                           alt_num = 10, kappa = 1, y_seed = 12,
+                           alt_num = 10, y_seed = 12,
                            invest_j,
-                           sample_type = "random",
-                           naive_sampler = T,
+                           naive_sampler = F,
                            kn_reg_method = "local_lin_reg",
-                           statistic = stat.glmnet_coefdiff_lm,
-                           cali_var = "beta_lasso")
+                           statistic = stat.glmnet_coefdiff_lm)
 
 
 draw_ineq(ineq_invest)
@@ -866,7 +815,7 @@ print(ineq_invest$kn_rej_set$right_vjy)
 ```
 
 
-```{r}
+```{r eval=F}
 alpha <- 0.05
 mc_used <- read.csv(paste0("~/Workspace/Research/dBH-Knockoff_improve/18-Rpackage/cknockoff_expr/data/test_data/mc_used_pair/mc_used_", alpha, ".csv"), header = FALSE)
 mc_sample_size_before_stop <- mc_used$V2
@@ -880,6 +829,7 @@ mc_sample_size_before_stop <- mc_used$V2
 print(sum(mc_sample_size_before_stop))
 hist(mc_sample_size_before_stop, breaks = 100)
 ```
+
 
 
 ```{r eval=F}

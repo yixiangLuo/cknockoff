@@ -198,7 +198,7 @@ cknockoff <- function(X, y,
     # prepare repeatedly used quantities
     mc_used <- 0
     ineq <- NULL
-    ineq_combine <- NULL
+    # ineq_combine <- NULL
     decision <- NA
     select_j <- F
 
@@ -211,16 +211,19 @@ cknockoff <- function(X, y,
     cali_rej_set <- where_cali_rej(j, y.pack, X.pack)
 
 
-    if(Rhat_level > 0){
-      relax_factor <- 2
-      Rhat_to_rej_j_est <- Rhat_to_rej_j(alpha, n, p, cali_rej_set, kn_rej_set)
-      Rhat_level_j <- ifelse(Rhat_to_rej_j_est <= Rhat_max_try * relax_factor &&
-                               Rhat_to_rej_j_est >= 1 / relax_factor, 1, 0)
-    } else{
-      Rhat_level_j <- 0
-    }
-    Rhat_vec <- NULL
-
+    # if(Rhat_level > 0){
+    #   relax_factor <- 2
+    #   Rhat_to_rej_j_est <- Rhat_to_rej_j(alpha, n, p, cali_rej_set, kn_rej_set)
+    #   Rhat_level_j <- ifelse(Rhat_to_rej_j_est <= Rhat_max_try * relax_factor &&
+    #                            Rhat_to_rej_j_est >= 1 / relax_factor, 1, 0)
+    # } else{
+    #   Rhat_level_j <- 0
+    # }
+    # Rhat_vec <- NULL
+    Rhat_level_j <- 0
+    kn_stat_mc_record <- matrix(NA, nrow = p, ncol = mc_size)
+    DPj_record <- rep(NA, mc_size)
+    bj_record <- rep(NA, mc_size)
 
     # we divide the whole MC samples set into "mc_rounds" batches of size "mc_size"
     # and work on each batch sequentially for efficiency reason.
@@ -268,18 +271,17 @@ cknockoff <- function(X, y,
         cali_stat_mc <- abs(sum(X[, j] * y_cond[, mc_i]) - y.pack$Xy_bias[j])
 
 
-        if(Rhat_level_j > 0 && length(Rhat_vec) >= 10){
-          if(mean(1/Rhat_vec) >= min(1/1.2, 2/Rhat_to_rej_j_est) &&
-             mean(ineq[1:mc_used]) > 0.08/mc_used){
-            Rhat_level_j <- 0
-          }
-        }
+        # if(Rhat_level_j > 0 && length(Rhat_vec) >= 10){
+        #   if(mean(1/Rhat_vec) >= min(1/1.2, 2/Rhat_to_rej_j_est) &&
+        #      mean(ineq[1:mc_used]) > 0.08/mc_used){
+        #     Rhat_level_j <- 0
+        #   }
+        # }
 
         if(Rhat_level_j > 0){
-          tvals_mc <- y_to_t(y_cond[, mc_i], X.pack$vj_mat, sigmahat_XXk_res[mc_i])
           Rhat.pack <- list(X.pack = X.pack, y_mc = y_cond[, mc_i],
                             statistic = statistic,
-                            tvals_mc = tvals_mc,
+                            sigmahat_XXk_res = sigmahat_XXk_res,
                             Rhat_max_try = Rhat_max_try,
                             Rhat_calc_max_step = Rhat_calc_max_step)
         } else{
@@ -291,11 +293,19 @@ cknockoff <- function(X, y,
                              Rhat.pack)
 
 
-        Rhat_vec <- c(Rhat_vec, fj_result$Rhat)
+        # Rhat_vec <- c(Rhat_vec, fj_result$Rhat)
 
         # record the result
         mc_used <- mc_used + 1
         ineq[mc_used] <- fj_result$fj * sample_weights[mc_i]
+
+        if(Rhat_level > 0 && mc_round == 1){
+          DPj_record[mc_i] <- fj_result$DP_j
+          bj_record[mc_i] <- fj_result$b_j
+          if(abs(fj_result$DP_j - 1) < 1e-10){
+            kn_stat_mc_record[, mc_i] <- kn_stat_mc
+          }
+        }
 
         # compute the confidence interval and make decision
         decision <- make_decision(ineq[1:mc_used], ineq_bounds, threshold = 0,
@@ -303,6 +313,56 @@ cknockoff <- function(X, y,
                                   accept_alpha = 0.05)
         if(decision$confident){ break }
 
+      }
+
+      if(Rhat_level > 0 && mc_round == 1){
+        DPj_record <- DPj_record[1:mc_used]
+        bj_record <- bj_record[1:mc_used]
+        sample_weights <- sample_weights[1:mc_used]
+        Rhat_index <- which(abs(DPj_record - 1) < 1e-10)
+
+        if(!decision$reject && length(Rhat_index) > 0 && length(Rhat_index) < mc_used){
+          Rhat_rej_j <- Rhat_to_rej_j(sample_weights, DPj_record, bj_record, Rhat_index)
+
+          if(Rhat_rej_j <= Rhat_max_try){
+            Rhat_vec <- NULL
+
+            for(mc_i in Rhat_index){
+              Rhat <- cknockoff_Rhat(X.pack, y_cond[, mc_i], j_exclude = j,
+                                     kn_stats_obs = kn_stat_mc_record[, mc_i],
+                                     sigmahat_XXk_res = sigmahat_XXk_res[mc_i],
+                                     statistic = statistic,
+                                     alpha = alpha,
+                                     Rhat_max_try = Rhat_max_try,
+                                     Rhat_calc_max_step = Rhat_calc_max_step)$Rhat
+
+              ineq[mc_i] <- (1/Rhat - bj_record[mc_i]) * sample_weights[mc_i]
+
+              decision <- make_decision(ineq[1:mc_i], ineq_bounds, threshold = 0,
+                                        rej_alpha = min(0.05, alpha * max(1, length(init_selected)) / length(candidates)),
+                                        accept_alpha = 0.05)
+              if(decision$confident){ break }
+
+              Rhat_vec <- c(Rhat_vec, Rhat)
+              if(length(Rhat_vec) >= 10){
+                if(mean(1/Rhat_vec) >= 1.5/Rhat_rej_j && !decision$reject){
+                  break
+                }
+              }
+
+            }
+
+            if(!decision$confident){
+              decision <- make_decision(ineq[1:mc_used], ineq_bounds, threshold = 0,
+                                        rej_alpha = min(0.05, alpha * max(1, length(init_selected)) / length(candidates)),
+                                        accept_alpha = 0.05)
+            }
+          }
+          if(decision$reject){
+            Rhat_level_j <- 1
+            ineq <- ineq[1:mc_used]
+          }
+        }
       }
 
       # decide rejecting or not
@@ -386,41 +446,55 @@ cknockoff <- function(X, y,
 }
 
 
-Rhat_to_rej_j <- function(alpha, n, p, cali_rej_set, kn_rej_set){
-  df <- n-p
 
-  if(!is.null(cali_rej_set$left)){
-    cali_rej_lb <- pt(cali_rej_set$left, df = df, lower.tail = T)
-    cali_rej_ub <- pt(cali_rej_set$right, df = df, lower.tail = T)
-    cali_rej_mass <- sum(cali_rej_ub - cali_rej_lb)
+Rhat_to_rej_j <- function(sample_weights, DPj_record, bj_record, Rhat_index){
+  other_value <- sum(DPj_record[-Rhat_index] * sample_weights[-Rhat_index]) - sum(bj_record * sample_weights)
+  if(other_value >= 0){
+    Rhat_to_rej <- Inf
   } else{
-    return(Inf)
+    Rhat_to_rej <- 1/(-other_value / sum(sample_weights[Rhat_index]))
   }
-
-  if(!is.null(kn_rej_set$left)){
-    kn_rej_lb <- pt(kn_rej_set$left, df = df, lower.tail = T)
-    kn_rej_ub <- pt(kn_rej_set$right, df = df, lower.tail = T)
-    kn_rej_mass <- sum(kn_rej_ub - kn_rej_lb)
-  } else{
-    return(Inf)
-  }
-
-  b_j_est <- alpha / (ceiling(1/alpha - 1)) * (cali_rej_mass + kn_rej_mass)
-  Rhat_to_rej <- cali_rej_mass / b_j_est
 
   return(Rhat_to_rej)
 }
 
+# Rhat_to_rej_j <- function(alpha, n, p, cali_rej_set, kn_rej_set){
+#   df <- n-p
+#
+#   if(!is.null(cali_rej_set$left)){
+#     cali_rej_lb <- pt(cali_rej_set$left, df = df, lower.tail = T)
+#     cali_rej_ub <- pt(cali_rej_set$right, df = df, lower.tail = T)
+#     cali_rej_mass <- sum(cali_rej_ub - cali_rej_lb)
+#   } else{
+#     return(Inf)
+#   }
+#
+#   if(!is.null(kn_rej_set$left)){
+#     kn_rej_lb <- pt(kn_rej_set$left, df = df, lower.tail = T)
+#     kn_rej_ub <- pt(kn_rej_set$right, df = df, lower.tail = T)
+#     kn_rej_mass <- sum(kn_rej_ub - kn_rej_lb)
+#   } else{
+#     return(Inf)
+#   }
+#
+#   b_j_est <- alpha / (ceiling(1/alpha - 1)) * (cali_rej_mass + kn_rej_mass)
+#   Rhat_to_rej <- cali_rej_mass / b_j_est
+#
+#   return(Rhat_to_rej)
+# }
+
 cknockoff_Rhat <- function(X.pack, y, j_exclude,
-                           kn_stats_obs, tvals_obs,
+                           kn_stats_obs,
+                           sigmahat_XXk_res,
                            statistic,
                            alpha,
                            Rhat_max_try,
                            Rhat_calc_max_step){
   n <- length(y)
-  p <- length(tvals_obs)
+  p <- length(kn_stats_obs)
   df <- n - p
 
+  tvals_obs <- y_to_t(y, X.pack$vj_mat, sigmahat_XXk_res)
   pvals_obs <- pvals_t(tvals_obs, df, side = "two")
 
   candidates <- cKn_candidates(kn_stats_obs, pvals_obs, alpha,
@@ -435,7 +509,7 @@ cknockoff_Rhat <- function(X.pack, y, j_exclude,
 
   n_candidates <- min(length(candidates), Rhat_max_try)
   if(n_candidates > 0)  candidates <- candidates[1:n_candidates]
-  else return(list(selected = NULL))
+  else return(list(selected = NULL, Rhat = 1))
 
   y.pack <- process_y(X.pack, y)
 
@@ -446,9 +520,7 @@ cknockoff_Rhat <- function(X.pack, y, j_exclude,
   cali_stats_obs <- abs(c(matrix(y, nrow = 1) %*% X.pack$X) - y.pack$Xy_bias)
 
   selected <- sapply(candidates, function(j){
-    cali_rej_set <- where_cali_rej(j, y.pack,
-                                   X.pack = list(Xj = X.pack$X[, j],
-                                                 vj = X.pack$vj_mat[, j]))
+    cali_rej_set <- where_cali_rej(j, y.pack, X.pack)
 
     if(is.null(cali_rej_set$left)) return(j)
 
@@ -475,10 +547,7 @@ cknockoff_Rhat <- function(X.pack, y, j_exclude,
     pval_left_nodes <- pval_left_start + direction * (1:Rhat_calc_max_step) * step_size
     tval_nodes <- qt(pval_left_nodes, df = df, lower.tail = TRUE)
     vjy_nodes <- tj_to_vjy(tval_nodes, y.pack$y_Pi_Xnoj_res_norm2, df)
-    y_results <- vjy_to_y(vjy_nodes, j, y.pack,
-                          X.pack = list(vj = X.pack$vj_mat[, j],
-                                        X_res_Xk_basis = X.pack$X_res_Xk_basis,
-                                        XXk_res_unit = X.pack$XXk_res_unit))
+    y_results <- vjy_to_y(vjy_nodes, j, y.pack, X.pack)
 
     for(mc_i in 1:Rhat_calc_max_step){
       if("sigma_tilde" %in% names(formals(statistic))){
@@ -506,7 +575,7 @@ cknockoff_Rhat <- function(X.pack, y, j_exclude,
 
   selected <- selected[!is.na(selected)]
 
-  return(list(selected = selected))
+  return(list(selected = selected, Rhat = length(union(selected, j_exclude))))
 }
 
 
@@ -544,7 +613,7 @@ calc_fj <- function(j,
                                      y = Rhat.pack$y_mc,
                                      j_exclude = j,
                                      kn_stats_obs = kn_stat_mc,
-                                     tvals_obs = Rhat.pack$tvals_mc,
+                                     sigmahat_XXk_res = Rhat.pack$sigmahat_XXk_res,
                                      statistic = Rhat.pack$statistic,
                                      alpha = alpha,
                                      Rhat_max_try = Rhat.pack$Rhat_max_try,

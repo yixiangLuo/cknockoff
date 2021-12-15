@@ -40,10 +40,15 @@ m_in_HCS <- function(X_seq, m, alpha = 0.05, c = 1/2, theta = 1/2, lambdas_deno 
 }
 
 # the lower and upper bound of the LHS of the inequality
-get_ineq_bound <- function(alpha, p, weights){
-  upper <- max(1 * weights$rej_weight, 0 * weights$rest_weight)
-  lower <- min((1/p - alpha) * weights$rej_weight,
-               (- alpha) * weights$rest_weight)
+get_Ej_bound <- function(alpha, p, weights, sample_coupling){
+  if(!sample_coupling){
+    upper <- max(1 * weights$rej_weight, 0 * weights$rest_weight)
+    lower <- min((1/p - alpha) * weights$rej_weight,
+                 (- alpha) * weights$rest_weight)
+  } else{
+    upper <- 1 * weights$rej_weight/2
+    lower <- (1/p - alpha) * weights$rej_weight/2 -  alpha * weights$rest_weight/2
+  }
 
   bounds <- list(upper = upper, lower = lower)
 

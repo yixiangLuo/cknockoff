@@ -1,7 +1,7 @@
 
 # sampling from the p-value (calibration) rejection set union the knockoff rejection set
 y_sampler_cond_Sj <- function(sample_size, cali_rej_reg, kn_rej_reg, j,
-                              y.pack, X.pack){
+                              y.pack, X.pack, sample_coupling){
   df <- y.pack$df
   y_Pi_Xnoj_res_norm2 <- y.pack$y_Pi_Xnoj_res_norm2[j]
 
@@ -31,14 +31,19 @@ y_sampler_cond_Sj <- function(sample_size, cali_rej_reg, kn_rej_reg, j,
   if(total_mass == 0){
     return(0)
   }
-  # if(rest_mass == 0){
-  #   return(1)
-  # }
+  if(sample_coupling && rest_mass == 0){
+    # sample_coupling <- F
+    return(1)
+  }
   if(rej_mass == 0){
     return(-1)
   }
 
-  rej_sample_prop <- min(1, ceiling((rej_mass/total_mass * sample_size)) / sample_size)
+  if(sample_coupling){
+    rej_sample_prop <- 1/2
+  } else{
+    rej_sample_prop <- min(1, ceiling((rej_mass/total_mass * sample_size)) / sample_size)
+  }
 
   # sampling in the calibration rejection set and compute the
   # importance sampling weights
@@ -71,13 +76,22 @@ y_sampler_cond_Sj <- function(sample_size, cali_rej_reg, kn_rej_reg, j,
     rest_weights <- NULL
   }
 
-  # randomly shuffle the samples
-  if(sample_size > 1){
-    shuffle <- c(1, sample(2:sample_size)) # make sure at least one sample from rej_set is seen
-    sample_t <- c(rej_t, rest_t)[shuffle]
-    sample_weights <- c(rej_weights, rest_weights)[shuffle]
+  if(!sample_coupling){
+    # randomly shuffle the samples
+    if(sample_size > 1){
+      shuffle <- c(1, sample(2:sample_size)) # make sure at least one sample from rej_set is seen
+      sample_t <- c(rej_t, rest_t)[shuffle]
+      sample_weights <- c(rej_weights, rest_weights)[shuffle]
+    }
+  } else{
+    # interweave the samples so that they are in pairs in the resulting sequence of samples
+    interweave <- c(seq(from = 1, to = sample_size-1, length.out = sample_size/2),
+                    seq(from = 2, to = sample_size, length.out = sample_size/2))
+    sample_t <- rep(NA, sample_size)
+    sample_t[interweave] <- c(rej_t, rest_t)
+    sample_weights <- rep(NA, sample_size)
+    sample_weights[interweave] <- c(rej_weights, rest_weights)
   }
-
 
   # convert the samples of T_j to response vector y
   sample_vjy <- tj_to_vjy(sample_t, y_Pi_Xnoj_res_norm2, df)

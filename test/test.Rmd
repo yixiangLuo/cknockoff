@@ -16,6 +16,7 @@ library(tidyverse)
 library(foreach)
 library(doParallel)
 library(KernSmooth)
+library(knockoff)
 library(devtools)
 
 load_all()
@@ -139,7 +140,8 @@ cKnockoff_j <- function(y, X, X.pack,
                         invest_j = NULL,
                         naive_sampler = T,
                         kn_reg_method = "local_lin_reg",
-                        statistic){
+                        statistic,
+                        sample_coupling){
     # X <- X_invest
     # y <- y_invest
     invest_mode <- T
@@ -222,21 +224,21 @@ cKnockoff_j <- function(y, X, X.pack,
     sample_region <- interval_union(kn_rej_set, cali_rej_set)
 
     sample_res <- y_sampler_cond_Sj(mc_size, cali_rej_set, kn_rej_set, j,
-                                    y.pack, X.pack)
+                                    y.pack, X.pack, sample_coupling)
     if(!naive_sampler){
         y_cond <- sample_res$y_samples
         sample_weights <- sample_res$sample_weights
         sigmahat_X_res <- sample_res$sigmahat_X_res
         sigmahat_XXk_res <- sample_res$sigmahat_XXk_res
 
-        ineq_bounds <- get_ineq_bound(alpha, p, sample_res$weights)
+        ineq_bounds <- get_Ej_bound(alpha, p, sample_res$weights, sample_coupling)
     }
 
     if(invest_mode){
         weights_mc <- sample_weights
     }
 
-    ineq <- rep(NA, mc_size)
+    Ej_mc <- rep(NA, mc_size)
 
     for(mc_i in 1:mc_size){
 
@@ -335,7 +337,7 @@ cKnockoff_j <- function(y, X, X.pack,
         #
         #     ineq_in_rej <- (p_ineq$ineq_L[1:mc_i] - p_ineq$ineq_R[1:mc_i]) * sample_weights[1:mc_i]
         #     ineq_combine <- (ineq_in_rej[seq(1, mc_i-1, length.out = mc_i/2)] + ineq_in_rej[seq(2, mc_i, length.out = mc_i/2)]) / 2
-        #     ineq_bounds <- get_ineq_bound(alpha, p, sample_res$weights)
+        #     ineq_bounds <- get_Ej_bound(alpha, p, sample_res$weights, sample_coupling)
         #
         #     # make decision
         #     decision <- make_decision(ineq_combine[1:(mc_i/2)], ineq_bounds, threshold = 0,
@@ -350,9 +352,9 @@ cKnockoff_j <- function(y, X, X.pack,
         # }
 
         # # HCS confidence interval
-        # ineq[mc_i] <- (g_star - w_tilde * alpha) * sample_weights[mc_i]
+        # Ej_mc[mc_i] <- (g_star - w_tilde * alpha) * sample_weights[mc_i]
         # if(mc_i %% 2 ==0){
-        #     ineq_combine <- (ineq[seq(1, mc_i-1, length.out = mc_i/2)] + ineq[seq(2, mc_i, length.out = mc_i/2)]) / 2
+        #     ineq_combine <- (Ej_mc[seq(1, mc_i-1, length.out = mc_i/2)] + Ej_mc[seq(2, mc_i, length.out = mc_i/2)]) / 2
         #
         #     ineq_unit <- sample_to_unit(ineq_combine[1:(mc_i/2)], ineq_bounds)
         #     thr_unit <- sample_to_unit(0, ineq_bounds)
@@ -371,11 +373,15 @@ cKnockoff_j <- function(y, X, X.pack,
     num_in_rej <- length(inds_in_rej)
     ineq_in_rej <- (p_ineq$ineq_L[inds_in_rej] - p_ineq$ineq_R[inds_in_rej]) * sample_weights[inds_in_rej] * num_in_rej / mc_size
     print(paste0("sample_mass (emp): ", num_in_rej / mc_size))
-    print(paste0("ineq: ", mean(ineq_in_rej)))
+    print(paste0("Ej: ", mean(ineq_in_rej)))
     if(!naive_sampler){
+      if(sample_coupling){
         ineq_combine <- (ineq_in_rej[seq(1, mc_size-1, length.out = mc_size/2)] + ineq_in_rej[seq(2, mc_size, length.out = mc_size/2)]) / 2
-        ineq_bounds <- get_ineq_bound(alpha, p, sample_res$weights)
-        print(paste0("outside_bound: ", sum((ineq_combine > ineq_bounds$upper) | (ineq_combine < ineq_bounds$lower))))
+      } else{
+        ineq_combine <- ineq_in_rej
+      }
+      ineq_bounds <- get_Ej_bound(alpha, p, sample_res$weights, sample_coupling)
+      print(paste0("outside_bound: ", sum((ineq_combine > ineq_bounds$upper) | (ineq_combine < ineq_bounds$lower))))
     }
 
     ineq_LR_mean <- rowMeans(ineq_LR)
@@ -400,9 +406,10 @@ cKnockoff_j <- function(y, X, X.pack,
 invest_ineq <- function(n, p, mc_size, X_type, target, alpha, alt_num,
                         y_seed, invest_j,
                         naive_sampler = T,
+                        sample_coupling,
                         kn_reg_method = "local_lin_reg",
                         statistic = stat.glmnet_coefdiff_lm,
-                        cali_var = "pval",
+                        noise = quote(rnorm(n)),
                         n_cores = 6){
     X_seed <- 1
     X <- gene_X(X_type, n, p, X_seed)
@@ -431,7 +438,8 @@ invest_ineq <- function(n, p, mc_size, X_type, target, alpha, alt_num,
 
 
     set.seed(y_seed)
-    y <- X %*% beta + rnorm(n)
+    y <- X %*% beta + eval(noise)
+    browser()
 
     ineq_invest <- cKnockoff_j(y, X, X.pack,
                                alpha = alpha,
@@ -440,7 +448,8 @@ invest_ineq <- function(n, p, mc_size, X_type, target, alpha, alt_num,
                                invest_j = invest_j,
                                naive_sampler = naive_sampler,
                                kn_reg_method = kn_reg_method,
-                               statistic = statistic)
+                               statistic = statistic,
+                               sample_coupling = sample_coupling)
 
 
     rejected <- sum((ineq_invest$p_ineq$ineq_L - ineq_invest$p_ineq$ineq_R) *
@@ -515,10 +524,29 @@ gene_X <- function(X_type = "IID_Normal", n, p, X_seed = 1){
         R <- chol(cov_mat)
         basis <- qr.Q(qr(matrix(rnorm(n*p), n)))
         X <- basis %*% R
+    } else if(X_type == "Sparse"){
+        X <- diag(1, nrow = n, ncol = p)
+        nonzeros <- matrix(NA, nrow = p, ncol = 2)
+        nonzeros[, 1] <- 1:p
+        nonzeros[, 2] <- sample(1:p, p, replace = T)
+        X[nonzeros] <- X[nonzeros] + 0.5
     }
     # X <- scale(X, center = FALSE, scale = sqrt(colSums(X^2)))
 
     return(X)
+}
+
+corr_noise <- function(n, rho){
+    cov_mat <- matrix(rho, n, n)
+    diag(cov_mat) <- 1
+    # cov_mat <- matrix(0, n, n)
+    # cov_mat[abs(row(cov_mat) - col(cov_mat)) <= 1] <- -rho * 0.5
+    # diag(cov_mat) <- 1
+    
+    R <- chol(cov_mat)
+    noise <- t(R) %*% matrix(rnorm(n), nrow = n)
+    
+    return(noise)
 }
 
 
@@ -777,15 +805,20 @@ mc_size <- 500
 target <- 0.5
 
 alpha <- 0.2
-invest_j <- 21
+invest_j <- 25
 #31, 6
 
-ineq_invest <- invest_ineq(n, p, mc_size, X_type = "MCC", target, alpha,
+ineq_invest <- invest_ineq(n, p, mc_size, X_type = "Sparse", target, alpha,
                            alt_num = 10, y_seed = 12,
                            invest_j,
-                           naive_sampler = F,
+                           naive_sampler = T,
+                           sample_coupling = F,
                            kn_reg_method = "local_lin_reg",
-                           statistic = stat.glmnet_coefdiff_lm)
+                           statistic = stat.glmnet_coefdiff_lm,
+                           # noise = quote(corr_noise(n, rho = 0.999))
+                           quote(rt(n, df = 3))
+                           # noise = quote(rnorm(n))
+                           )
 
 
 draw_ineq(ineq_invest)
@@ -809,10 +842,87 @@ print(ineq_invest$kn_rej_set$right_vjy)
 ## naive
 # 0.0222158108558109
 ## sampler
-# 0.0327135776748232
+# Ej: 0.00974968681598248
 
 
 ```
+
+
+```{r eval=F}
+p <- 100
+n <- 3*p
+
+X_seed <- 2021
+pi1 <- 10 / p
+
+alpha <- 0.1
+target <- 0.5
+target_at_alpha <- 0.2
+
+sample_size <- 100
+n_cores <- 6
+
+X_type <- "IID_Normal"  # "IID_Normal", "MCC", "MCC_Block"
+posit_type <- "random"
+
+X <- gene_X(X_type, n, p, X_seed)
+X.pack <- process_X(X, knockoffs = create.fixed)
+X <- X.pack$X
+
+statistic <- stat.glmnet_coefdiff_lm
+
+mu1 <- BH_lm_calib(X, pi1, noise = quote(rnorm(n)),
+                   posit_type, 1, side = "two", nreps = 200,
+                   alpha = target_at_alpha, target = target, n_cores = n_cores)
+beta <- genmu(p, pi1, mu1, posit_type, 1)
+H0 <- beta == 0
+
+registerDoParallel(n_cores)
+
+results <- foreach(iter = 1:sample_size, .options.multicore = list(preschedule = F)) %dopar% {
+# results <- lapply(1:sample_size, function(iter){
+  # print(iter)
+  
+  set.seed(iter)
+  
+  y <- X %*% beta + rnorm(n)
+  
+  full_select <- cknockoff(X, y,
+                           statistic,
+                           alpha = alpha,
+                           n_cores = 1,
+                           X.pack = X.pack,
+                           Rhat_refine = F)$selected
+  
+  y.pack <- process_y(X.pack, y, randomize = F)
+  kn_stats_obs <- statistic(X, X.pack$X_kn, y,
+                            sigma_tilde = y.pack$sigmahat_XXk_res)
+  
+  Rhat_select <- cknockoff_Rhat(X.pack, y, j_exclude = NULL,
+                           kn_stats_obs,
+                           y.pack$sigmahat_XXk_res,
+                           statistic,
+                           alpha,
+                           Rhat_max_try = 5,
+                           Rhat_calc_max_step = 4)$selected
+  
+  return(list(full = full_select, Rhat = Rhat_select))
+}
+
+inconsistent_sel_num <- lapply(results, function(res){
+  length(setdiff(res$Rhat, res$full))
+})
+
+inconsistent_sel_num <- sum(unlist(inconsistent_sel_num))
+total_Rhat_sel <- lapply(results, function(res){
+  length(res$Rhat)
+})
+total_Rhat_sel <- sum(unlist(total_Rhat_sel))
+
+print(paste(inconsistent_sel_num, "out of", total_Rhat_sel, "selection in Rhat inconsistent with cKnockoff"))
+```
+
+
 
 
 ```{r eval=F}
@@ -836,7 +946,8 @@ hist(mc_sample_size_before_stop, breaks = 100)
 p <- 100; n <- 300; k <- 15
 X <- matrix(rnorm(n*p), n)
 nonzero <- sample(p, k)
-beta <- 3.5 * (1:p %in% nonzero)
+# beta <- 1 * (1:p %in% nonzero)
+beta <- 0.2 * (1:p %in% nonzero)
 y <- X %*% beta + rnorm(n)
 print(which(1:p %in% nonzero))
 
@@ -844,7 +955,7 @@ print(which(1:p %in% nonzero))
 result <- cknockoff(X, y, alpha = 0.05, n_cores = 1)
 print(result$selected)
 
-result <- cknockoff(X, y, alpha = 0.05, n_cores = 1, Rhat_level = 1)
+result <- cknockoff(X, y, alpha = 0.05, n_cores = 1, Rhat_refine = T)
 print(result$selected)
 
 ```

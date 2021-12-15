@@ -105,10 +105,10 @@ cknockoff <- function(X, y,
                       knockoff.type = c("fixed", "model"),
                       prelim_result = NULL,
                       X.pack = NULL,
-                      Rhat_level = 0){
+                      Rhat_refine = F){
 
   mc_rounds <- 5
-  mc_size <- 100
+  mc_size <- 100  # must be even as paring samples is employed
 
   Rhat_max_try <- 5
   Rhat_calc_max_step <- 4
@@ -155,7 +155,7 @@ cknockoff <- function(X, y,
   p <- NCOL(X)
   df <- n - p
 
-  # knockoff and Bonferroni rejection
+  # knockoff rejection
   if(is.null(record)){
     if("sigma_tilde" %in% names(formals(statistic))){
       kn_stats_obs <- statistic(X, X.pack$X_kn, y,
@@ -192,17 +192,21 @@ cknockoff <- function(X, y,
   }
   cali_stats_obs <- abs(c(matrix(y, nrow = 1) %*% X) - y.pack$Xy_bias)
 
+  # the confidence sequence alpha for controling Monte-Carlo error
+  rej_alpha <- min(0.05, alpha * max(1, length(init_selected)) / length(candidates))
+
   # check each hypothesis in sequence/parallel
   cali_selected <- forall(j = candidates, .options.multicore = list(preschedule = F)) %exec% {
 
-    # prepare repeatedly used quantities
-    mc_used <- 0
-    ineq <- NULL
-    # ineq_combine <- NULL
-    decision <- NA
-    select_j <- F
+    # prepare repeatedly used variables
+    Ej_mc <- NULL  # raw record for the Ej samples
+    mc_used <- 0  # number of MC samples used up to now
+    Ej_samples <- NULL  # adjusted record for the Ej samples based on sample_coupling
+    n_Ej_samples <- 0  # number of recorded Ej_samples up to now
 
-    # prepare the sets where knockoff or a individual p-value test would reject j
+    select_j <- F  # do we select j, initially set as F
+
+    # prepare the sets where knockoff or the calibration stat would reject j
     # conditional on Sj. This will be used in generating Monte-Carlo samples of y
     # conditional on Sj.
     kn_rej_set <- where_kn_rej(alpha, j, y.pack, X.pack,
@@ -210,33 +214,26 @@ cknockoff <- function(X, y,
 
     cali_rej_set <- where_cali_rej(j, y.pack, X.pack)
 
+    # couple the samples?
+    sample_coupling <- couple_samples(n, p, cali_rej_set, kn_rej_set)
 
-    # if(Rhat_level > 0){
-    #   relax_factor <- 2
-    #   Rhat_to_rej_j_est <- Rhat_to_rej_j(alpha, n, p, cali_rej_set, kn_rej_set)
-    #   Rhat_level_j <- ifelse(Rhat_to_rej_j_est <= Rhat_max_try * relax_factor &&
-    #                            Rhat_to_rej_j_est >= 1 / relax_factor, 1, 0)
-    # } else{
-    #   Rhat_level_j <- 0
-    # }
-    # Rhat_vec <- NULL
-    Rhat_level_j <- 0
-    kn_stat_mc_record <- matrix(NA, nrow = p, ncol = mc_size)
-    DPj_record <- rep(NA, mc_size)
-    bj_record <- rep(NA, mc_size)
+    # storage for recording the calculated statistics for post-hoc Rhat refinement
+    calc_Rhat_online <- F
+    record_mc <- list(kn_stat = matrix(NA, nrow = p, ncol = mc_size),
+                      DPj = rep(NA, mc_size), bj = rep(NA, mc_size))
 
-    # we divide the whole MC samples set into "mc_rounds" batches of size "mc_size"
+    # divide the whole MC samples set into "mc_rounds" batches of size "mc_size"
     # and work on each batch sequentially for efficiency reason.
     for(mc_round in 1:mc_rounds){
-      ineq <- c(ineq, rep(NA, mc_size))
-      # ineq_combine <- c(ineq_combine, rep(NA, mc_size/2))
+      # expand the storage
+      Ej_mc <- c(Ej_mc, rep(NA, mc_size))
+      Ej_samples <- c(Ej_samples, rep(NA, mc_size))
 
       # generate Monte-Carlo samples of y conditional Sj for this batch
       sample_res <- y_sampler_cond_Sj(mc_size, cali_rej_set, kn_rej_set, j,
-                                      y.pack, X.pack)
+                                      y.pack, X.pack, sample_coupling)
 
-
-      # make decision if we can tell whether ineq <=0 based on the sampling region
+      # make decision if we can tell whether Ej <=0 based on the sampling region
       if(is.numeric(sample_res) && mc_round == 1){
         if(sample_res == 0) break
         else if(sample_res == 1){
@@ -247,15 +244,15 @@ cknockoff <- function(X, y,
           break
         }
       }
+
       # retrive the samples
       y_cond <- sample_res$y_samples
       sample_weights <- sample_res$sample_weights
-
       sigmahat_X_res <- sample_res$sigmahat_X_res
       sigmahat_XXk_res <- sample_res$sigmahat_XXk_res
 
-      # the upper and lower bound of ineq for constructing confidence sequence.
-      ineq_bounds <- get_ineq_bound(alpha, p, sample_res$weights)
+      # the upper and lower bound of Ej for constructing confidence sequence.
+      Ej_bounds <- get_Ej_bound(alpha, p, sample_res$weights, sample_coupling)
 
       # for each y MC sample in conditional calibration
       for(mc_i in 1:mc_size){
@@ -268,17 +265,11 @@ cknockoff <- function(X, y,
           kn_stat_mc <- statistic(X, X.pack$X_kn, y_cond[, mc_i])
         }
 
+        # compute calibration stat
         cali_stat_mc <- abs(sum(X[, j] * y_cond[, mc_i]) - y.pack$Xy_bias[j])
 
-
-        # if(Rhat_level_j > 0 && length(Rhat_vec) >= 10){
-        #   if(mean(1/Rhat_vec) >= min(1/1.2, 2/Rhat_to_rej_j_est) &&
-        #      mean(ineq[1:mc_used]) > 0.08/mc_used){
-        #     Rhat_level_j <- 0
-        #   }
-        # }
-
-        if(Rhat_level_j > 0){
+        # do Rhat refinement in realtime?
+        if(calc_Rhat_online){
           Rhat.pack <- list(X.pack = X.pack, y_mc = y_cond[, mc_i],
                             statistic = statistic,
                             sigmahat_XXk_res = sigmahat_XXk_res,
@@ -287,95 +278,83 @@ cknockoff <- function(X, y,
         } else{
           Rhat.pack <- NA
         }
+        # compute fj from the current MC sample
         fj_result <- calc_fj(j,
                              alpha, kn_stat_mc,
                              cali_stats_obs[j], cali_stat_mc,
                              Rhat.pack)
 
-
-        # Rhat_vec <- c(Rhat_vec, fj_result$Rhat)
-
-        # record the result
+        # record the raw result
         mc_used <- mc_used + 1
-        ineq[mc_used] <- fj_result$fj * sample_weights[mc_i]
+        Ej_mc[mc_used] <- fj_result$fj * sample_weights[mc_i]
 
-        if(Rhat_level > 0 && mc_round == 1){
-          DPj_record[mc_i] <- fj_result$DP_j
-          bj_record[mc_i] <- fj_result$b_j
-          if(abs(fj_result$DP_j - 1) < 1e-10){
-            kn_stat_mc_record[, mc_i] <- kn_stat_mc
+        # record the adjusted Ej_samples based on coupling
+        if(!sample_coupling){
+          n_Ej_samples <- mc_used
+          Ej_samples[n_Ej_samples] <- Ej_mc[mc_used]
+          try_decide <- T
+        } else{
+          if(mc_used %% 2 == 0){
+            n_Ej_samples <- mc_used/2
+            Ej_samples[n_Ej_samples] <- (Ej_mc[mc_used-1] + Ej_mc[mc_used]) / 2
+            try_decide <- T
+          } else{
+            try_decide <- F
           }
         }
 
-        # compute the confidence interval and make decision
-        decision <- make_decision(ineq[1:mc_used], ineq_bounds, threshold = 0,
-                                  rej_alpha = min(0.05, alpha * max(1, length(init_selected)) / length(candidates)),
-                                  accept_alpha = 0.05)
-        if(decision$confident){ break }
+        # record the more detailed statistics for post-hoc Rhat refinement
+        if(Rhat_refine && mc_round == 1){
+          record_mc$DPj[mc_i] <- fj_result$DP_j
+          record_mc$bj[mc_i] <- fj_result$b_j
+          if(abs(fj_result$DP_j - 1) < 1e-10){
+            record_mc$kn_stat[, mc_i] <- kn_stat_mc
+          }
+        }
+
+        # calculate the confidence interval and make decision
+        if(try_decide){
+          decision <- make_decision(Ej_samples[1:n_Ej_samples], Ej_bounds, threshold = 0,
+                                    rej_alpha = rej_alpha, accept_alpha = 0.05)
+
+          if(decision$confident){ break }
+        }
 
       }
 
-      if(Rhat_level > 0 && mc_round == 1){
-        DPj_record <- DPj_record[1:mc_used]
-        bj_record <- bj_record[1:mc_used]
-        sample_weights <- sample_weights[1:mc_used]
-        Rhat_index <- which(abs(DPj_record - 1) < 1e-10)
+      # post-hoc Rhat refinement, for those not rejected only
+      if(Rhat_refine && !decision$reject && mc_round == 1){
+        Rhat.pack <- list(X.pack = X.pack,
+                          statistic = statistic,
+                          Rhat_max_try = Rhat_max_try,
+                          Rhat_calc_max_step = Rhat_calc_max_step)
 
-        if(!decision$reject && length(Rhat_index) > 0 && length(Rhat_index) < mc_used){
-          Rhat_rej_j <- Rhat_to_rej_j(sample_weights, DPj_record, bj_record, Rhat_index)
+        refined_result <- post_refine_Rhat(sample_res, record_mc,
+                                           mc_used, n_Ej_samples,
+                                           Ej_mc, Ej_samples,
+                                           Ej_bounds, sample_coupling,
+                                           decision, j,
+                                           Rhat.pack,
+                                           alpha, rej_alpha)
 
-          if(Rhat_rej_j <= Rhat_max_try){
-            Rhat_vec <- NULL
-
-            for(mc_i in Rhat_index){
-              Rhat <- cknockoff_Rhat(X.pack, y_cond[, mc_i], j_exclude = j,
-                                     kn_stats_obs = kn_stat_mc_record[, mc_i],
-                                     sigmahat_XXk_res = sigmahat_XXk_res[mc_i],
-                                     statistic = statistic,
-                                     alpha = alpha,
-                                     Rhat_max_try = Rhat_max_try,
-                                     Rhat_calc_max_step = Rhat_calc_max_step)$Rhat
-
-              ineq[mc_i] <- (1/Rhat - bj_record[mc_i]) * sample_weights[mc_i]
-
-              decision <- make_decision(ineq[1:mc_i], ineq_bounds, threshold = 0,
-                                        rej_alpha = min(0.05, alpha * max(1, length(init_selected)) / length(candidates)),
-                                        accept_alpha = 0.05)
-              if(decision$confident){ break }
-
-              Rhat_vec <- c(Rhat_vec, Rhat)
-              if(length(Rhat_vec) >= 10){
-                if(mean(1/Rhat_vec) >= 1.5/Rhat_rej_j && !decision$reject){
-                  break
-                }
-              }
-
-            }
-
-            if(!decision$confident){
-              decision <- make_decision(ineq[1:mc_used], ineq_bounds, threshold = 0,
-                                        rej_alpha = min(0.05, alpha * max(1, length(init_selected)) / length(candidates)),
-                                        accept_alpha = 0.05)
-            }
-          }
-          if(decision$reject){
-            Rhat_level_j <- 1
-            ineq <- ineq[1:mc_used]
-          }
-        }
+        decision <- refined_result$decision
+        calc_Rhat_online <- refined_result$calc_Rhat_online
+        Ej_mc <- refined_result$Ej_mc
+        Ej_samples <- refined_result$Ej_samples
       }
 
       # decide rejecting or not
-      if(decision$confident){
+      if(decision$confident){ # with confidence, do as suggested
         if(decision$reject){
           select_j <- T
         }
         break
       } else{
+        # if suggest accepting without confidence, follow it (conservative)
         if(!decision$reject){
           break
-        } else{
-          if(mc_round == mc_rounds){
+        } else{ # if suggest rejecting without confidence, continue running more rounds
+          if(mc_round == mc_rounds){ # if used up our budget, reject even without confidence
             select_j <- T
           }
         }
@@ -390,21 +369,10 @@ cknockoff <- function(X, y,
     }
   }
 
+  # resemble the selection set
   selected <- union(selected, unlist(cali_selected))
   if(!is.null(X.pack$X.names))
     names(selected) <- X.pack$X.names[selected]
-
-
-  # candidates_org <- candidates
-  # candidates <- sapply(candidates, function(candidate){
-  #   prefer <- kn_prefer(candidate, kn_stats_obs, alpha)
-  #   if(prefer) return(candidate)
-  #   else return(NA)
-  # })
-  # candidates <- candidates[!is.na(candidates)]
-  # missed <- intersect(setdiff(candidates_org, candidates), selected)
-  # write.table(missed, paste0("missed-", alpha, ".csv"), sep = ",", col.names = FALSE, append = T)
-
 
   # predict the sign of each beta
   sign_predict <- rep(0, p)
@@ -447,41 +415,125 @@ cknockoff <- function(X, y,
 
 
 
-Rhat_to_rej_j <- function(sample_weights, DPj_record, bj_record, Rhat_index){
-  other_value <- sum(DPj_record[-Rhat_index] * sample_weights[-Rhat_index]) - sum(bj_record * sample_weights)
-  if(other_value >= 0){
-    Rhat_to_rej <- Inf
+
+couple_samples <- function(n, p, cali_rej_set, kn_rej_set){
+  df <- n-p
+
+  # compute mass of the calibration rejection set
+  rej_set <- cali_rej_set
+  if(!is.null(rej_set$left)){
+    cali_rej_lb <- pt(rej_set$left, df = df, lower.tail = T)
+    cali_rej_ub <- pt(rej_set$right, df = df, lower.tail = T)
+    rej_mass <- sum(cali_rej_ub - cali_rej_lb)
   } else{
+    return(F)
+  }
+
+  # compute mass of the rest rejection set
+  rest_set <- interval_minus(kn_rej_set, cali_rej_set)
+  if(!is.null(rest_set$left)){
+    cali_rest_lb <- pt(rest_set$left, df = df, lower.tail = T)
+    cali_rest_ub <- pt(rest_set$right, df = df, lower.tail = T)
+    rest_mass <- sum(cali_rest_ub - cali_rest_lb)
+  } else{
+    return(F)
+  }
+
+  # if rej_mass and rest_mass are not far from each other, couple the samples to reduce vairance
+  # otherwise don't to avoid over sampling in a relatively small region
+  threshold <- 3
+  sample_coupling <- (rej_mass / rest_mass <= threshold) && (rest_mass / rej_mass <= threshold)
+
+  return(sample_coupling)
+}
+
+post_refine_Rhat <- function(sample_res, record_mc,
+                             mc_used, n_Ej_samples,
+                             Ej_mc, Ej_samples,
+                             Ej_bounds, sample_coupling,
+                             decision, j,
+                             Rhat.pack,
+                             alpha, rej_alpha){
+
+  # make code shorter
+  record_mc$DPj <- record_mc$DPj[1:mc_used]
+  record_mc$bj <- record_mc$bj[1:mc_used]
+  sample_weights <- sample_res$sample_weights[1:mc_used]
+  # locate the samples with DP_j = 1, where Rhat refinement is needed
+  Rhat_index <- which(abs(record_mc$DPj - 1) < 1e-10)
+
+  if(length(Rhat_index) > 0 && length(Rhat_index) < mc_used){
+    # how large should Rhat be to make j rejected by cKnockoff
+    Rhat_to_rej_j <- calc_Rhat_to_rej_j(sample_weights, record_mc, Rhat_index)
+
+    if(Rhat_to_rej_j <= Rhat.pack$Rhat_max_try){ # if it is within the budget
+      Rhat_vec <- NULL # record the realized refined Rhat
+
+      for(mc_i in Rhat_index){
+        # compute Rhat
+        Rhat <- cknockoff_Rhat(Rhat.pack$X.pack,
+                               sample_res$y_samples[, mc_i],
+                               j_exclude = j,
+                               kn_stats_obs = record_mc$kn_stat[, mc_i],
+                               sigmahat_XXk_res = sample_res$sigmahat_XXk_res[mc_i],
+                               statistic = Rhat.pack$statistic,
+                               alpha = alpha,
+                               Rhat_max_try = Rhat.pack$Rhat_max_try,
+                               Rhat_calc_max_step = Rhat.pack$Rhat_calc_max_step)$Rhat
+
+        # update the record for Ej
+        Ej_mc[mc_i] <- (1/Rhat - record_mc$bj[mc_i]) * sample_weights[mc_i]
+        # update the record for Ej_samples
+        if(!sample_coupling){
+          i_Ej_samples <- mc_i
+          Ej_samples[i_Ej_samples] <- Ej_mc[mc_i]
+        } else{
+          i_Ej_samples <- ceiling(mc_i/2)
+          Ej_samples[i_Ej_samples] <- (Ej_mc[2*i_Ej_samples-1] + Ej_mc[2*i_Ej_samples]) / 2
+        }
+
+        # make decision as if we have samples 1:mc_i
+        decision <- make_decision(Ej_samples[1:i_Ej_samples], Ej_bounds, threshold = 0,
+                                  rej_alpha = rej_alpha, accept_alpha = 0.05)
+        if(decision$confident){ break }
+
+        # stop refining Rhat if we cannot make Rhat as large as Rhat_to_rej_j
+        Rhat_vec <- c(Rhat_vec, Rhat)
+        if(length(Rhat_vec) >= 10){
+          if(mean(1/Rhat_vec) >= 1.5/Rhat_to_rej_j && !decision$reject){
+            break
+          }
+        }
+
+      }
+
+      # after Rhat refinement is done, make decision based on all samples
+      if(!decision$confident){
+        decision <- make_decision(Ej_samples[1:n_Ej_samples], Ej_bounds, threshold = 0,
+                                  rej_alpha = rej_alpha, accept_alpha = 0.05)
+      }
+    }
+  }
+
+  # do Rhat refinement online in the feture calculation,
+  # make effect only when !decision$confident and decision$reject
+  calc_Rhat_online <- T
+
+  return(list(decision = decision, calc_Rhat_online = calc_Rhat_online,
+              Ej_mc = Ej_mc, Ej_samples = Ej_samples))
+}
+
+calc_Rhat_to_rej_j <- function(sample_weights, record_mc, Rhat_index){
+  # the values in fj that Rhat refinement cannot change
+  other_value <- sum(record_mc$DPj[-Rhat_index] * sample_weights[-Rhat_index]) - sum(record_mc$bj * sample_weights)
+  if(other_value >= 0){ # if fj > 0 even when Rhat = Inf
+    Rhat_to_rej <- Inf
+  } else{  # compute the Rhat needed to turn fj < 0
     Rhat_to_rej <- 1/(-other_value / sum(sample_weights[Rhat_index]))
   }
 
   return(Rhat_to_rej)
 }
-
-# Rhat_to_rej_j <- function(alpha, n, p, cali_rej_set, kn_rej_set){
-#   df <- n-p
-#
-#   if(!is.null(cali_rej_set$left)){
-#     cali_rej_lb <- pt(cali_rej_set$left, df = df, lower.tail = T)
-#     cali_rej_ub <- pt(cali_rej_set$right, df = df, lower.tail = T)
-#     cali_rej_mass <- sum(cali_rej_ub - cali_rej_lb)
-#   } else{
-#     return(Inf)
-#   }
-#
-#   if(!is.null(kn_rej_set$left)){
-#     kn_rej_lb <- pt(kn_rej_set$left, df = df, lower.tail = T)
-#     kn_rej_ub <- pt(kn_rej_set$right, df = df, lower.tail = T)
-#     kn_rej_mass <- sum(kn_rej_ub - kn_rej_lb)
-#   } else{
-#     return(Inf)
-#   }
-#
-#   b_j_est <- alpha / (ceiling(1/alpha - 1)) * (cali_rej_mass + kn_rej_mass)
-#   Rhat_to_rej <- cali_rej_mass / b_j_est
-#
-#   return(Rhat_to_rej)
-# }
 
 cknockoff_Rhat <- function(X.pack, y, j_exclude,
                            kn_stats_obs,
@@ -494,23 +546,29 @@ cknockoff_Rhat <- function(X.pack, y, j_exclude,
   p <- length(kn_stats_obs)
   df <- n - p
 
+  # p-values for screening
   tvals_obs <- y_to_t(y, X.pack$vj_mat, sigmahat_XXk_res)
   pvals_obs <- pvals_t(tvals_obs, df, side = "two")
-
+  # screening
   candidates <- cKn_candidates(kn_stats_obs, pvals_obs, alpha,
                                record = NULL, selected = NULL)
+  # only keep the hypos with very small p-values
   candidates <- intersect(candidates, which(pvals_obs <= min(alpha / p,
                                                              0.01 * (alpha / (ceiling(1/alpha - 1))) )))
+  # exclude j as j must be in the Rhat
   candidates <- setdiff(candidates, j_exclude)
+  # order the candidates by how promising they are
   rank_p <- rank(pvals_obs[candidates])
   rank_kn <- rank(-abs(kn_stats_obs[candidates]))
   ranks <- rank(rank_p + rank_kn, ties.method = "first")
   candidates[ranks] <- candidates
 
+  # only keep the Rhat_max_try most promising hypos
   n_candidates <- min(length(candidates), Rhat_max_try)
   if(n_candidates > 0)  candidates <- candidates[1:n_candidates]
   else return(list(selected = NULL, Rhat = 1))
 
+  # prepare data
   y.pack <- process_y(X.pack, y)
 
   for(j in candidates){
@@ -519,7 +577,9 @@ cknockoff_Rhat <- function(X.pack, y, j_exclude,
   }
   cali_stats_obs <- abs(c(matrix(y, nrow = 1) %*% X.pack$X) - y.pack$Xy_bias)
 
+  # decide if each hypo can be rejected
   selected <- sapply(candidates, function(j){
+    # the calibration rejection set
     cali_rej_set <- where_cali_rej(j, y.pack, X.pack)
 
     if(is.null(cali_rej_set$left)) return(j)
@@ -528,27 +588,38 @@ cknockoff_Rhat <- function(X.pack, y, j_exclude,
     cali_rej_ub <- pt(cali_rej_set$right, df = df, lower.tail = T)
     cali_rej_mass <- sum(cali_rej_ub - cali_rej_lb)
 
+    # if cali_rej_set too large, don't reject j
     if(cali_rej_mass > 0.0067 * (alpha / (ceiling(1/alpha - 1)))) return(NA)
 
+    # where to start the numerical integration grid point?
     if(length(cali_rej_set$left) == 1){
+      # if cali_rej_set is an interval, start at the value closer to 0
       t_rej_points <- c(cali_rej_set$left, cali_rej_set$right)
       tval_start <- t_rej_points[which.min(abs(t_rej_points))]
     } else{
+      # otherwise start at the observed value
       tval_start <- tvals_obs[j]
     }
+    # forward the numerical integration towards 0
     direction <- -sign(tval_start)
 
+    # step size in the numerical integration, which expects to reject j at one try
     step_size <- cali_rej_mass / (alpha / (ceiling(1/alpha - 1))) * 1.5
+    # convert the t stat value to a one-sided p-value (so Lebesgue measure)
     pval_left_start <- pt(tval_start, df = df, lower.tail = TRUE)
 
+    # the DP_j and b_j value in the numerical integration up to now
     DP_j_accumulate <- cali_rej_mass
     b_j_accumulate <- 0
 
+    # move grid point forward
     pval_left_nodes <- pval_left_start + direction * (1:Rhat_calc_max_step) * step_size
+    # convert the p-value point to a y sample
     tval_nodes <- qt(pval_left_nodes, df = df, lower.tail = TRUE)
     vjy_nodes <- tj_to_vjy(tval_nodes, y.pack$y_Pi_Xnoj_res_norm2, df)
     y_results <- vjy_to_y(vjy_nodes, j, y.pack, X.pack)
 
+    # at each grid point, compute fj
     for(mc_i in 1:Rhat_calc_max_step){
       if("sigma_tilde" %in% names(formals(statistic))){
         kn_stat_mc <- statistic(X.pack$X, X.pack$X_kn, y_results$y_samples[, mc_i],
@@ -559,20 +630,25 @@ cknockoff_Rhat <- function(X.pack, y, j_exclude,
 
       cali_stat_mc <- abs(sum(X.pack$X[, j] * y_results$y_samples[, mc_i]) - y.pack$Xy_bias[j])
 
+      # compute fj without further Rhat refinement
       fj_result <- calc_fj(j,
                            alpha, kn_stat_mc,
                            cali_stats_obs[j], cali_stat_mc,
                            Rhat.pack = NA)
 
+      # update DP_j and b_j
       DP_j_accumulate <- DP_j_accumulate + fj_result$DP_j * step_size
       b_j_accumulate <- b_j_accumulate + fj_result$b_j * step_size
 
+      # reject if we see Ej <= 0, as Ej is decreasing when grid point move forward
       if(DP_j_accumulate <= b_j_accumulate) return(j)
     }
 
+    # if don't Ej <= 0, accept j
     return(NA)
   })
 
+  # remove the NAs in the selection set
   selected <- selected[!is.na(selected)]
 
   return(list(selected = selected, Rhat = length(union(selected, j_exclude))))
@@ -584,18 +660,17 @@ calc_fj <- function(j,
                     cali_stat_obs, cali_stat_mc,
                     Rhat.pack){
 
-  ## compute weights
+  ## compute b_j term
   # make rejection and fdp estimation based on knockoff statistics
   eskn_result <- kn.select(kn_stat_mc, alpha,
                          selective = T, early_stop = T)
   eskn_selected_mc <- eskn_result$selected
 
-  # compute weight
+  # compute b_j
   kn_null_num <- max(1, (eskn_result$fdp_est * length(eskn_selected_mc)))
   b_j <- alpha * (j %in% eskn_selected_mc) / kn_null_num
 
-  ## compute individual FDP contribution (DP_j in the code)
-
+  ## compute DP_j term
   # knockoff rejections
   kn_result <- kn.select(kn_stat_mc, alpha,
                          selective = T, early_stop = F)
@@ -606,7 +681,7 @@ calc_fj <- function(j,
 
   # R hat
   selected_mc <- kn_selected_mc
-
+  # Rhat refinement?
   if(!is.na(Rhat.pack) && length(union(selected_mc, j)) == 1 &&
      (j %in% union(kn_selected_mc, cali_selected_mc))){
     Rhat_recursive <- cknockoff_Rhat(X.pack = Rhat.pack$X.pack,
@@ -625,8 +700,10 @@ calc_fj <- function(j,
     Rhat <- NULL
   }
 
+  # compute DP_j
   DP_j <- (j %in% union(kn_selected_mc, cali_selected_mc)) / length(union(selected_mc, j))
 
+  # compute fj
   fj <- DP_j - b_j
 
   return(list(fj = fj, DP_j = DP_j, b_j = b_j, Rhat = Rhat))

@@ -272,7 +272,7 @@ cknockoff <- function(X, y,
         if(calc_Rhat_online){
           Rhat.pack <- list(X.pack = X.pack, y_mc = y_cond[, mc_i],
                             statistic = statistic,
-                            sigmahat_XXk_res = sigmahat_XXk_res,
+                            sigmahat_XXk_res = sigmahat_XXk_res[mc_i],
                             Rhat_max_try = Rhat_max_try,
                             Rhat_calc_max_step = Rhat_calc_max_step)
         } else{

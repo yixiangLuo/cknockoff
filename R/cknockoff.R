@@ -110,8 +110,8 @@ cknockoff <- function(X, y,
   mc_rounds <- 5
   mc_size <- 100  # must be even as paring samples is employed
 
-  Rhat_max_try <- 5
-  Rhat_calc_max_step <- 4
+  Rhat_max_try <- 3
+  Rhat_calc_max_step <- 3
 
   # knockoff.type <- match.arg(knockoff.type)
 

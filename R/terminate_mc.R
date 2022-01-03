@@ -1,3 +1,82 @@
+# decide whether to reject and if we have confidence. Difference confidence level
+# may be used for rejecting/not rejecting.
+make_decision <- function(samples, sample_bound, threshold, rej_alpha, accept_alpha){
+  # transform the samples and threshold to [0,1]
+  samples_unit <- sample_to_unit(samples, sample_bound)
+  thr_unit <- sample_to_unit(threshold, sample_bound)
+
+  sample_mean <- mean(samples_unit)
+  lambdas_deno <- lambdas_denominator(samples_unit)
+
+  # use the sample mean if we can't decide with confidence
+  confident <- F
+  reject <- (sample_mean <= thr_unit)
+
+  # make decision when we have confidence. We assume confidence level (1-rej_alpha)
+  # for rejection is no smaller than the one (1-accept_alpha) for acception.
+
+  # if the tighter confidence interval exclude the threshold
+  thr_HCS_rej <- m_in_HCS(samples_unit, m = thr_unit, alpha = rej_alpha , lambdas_deno = lambdas_deno)
+  if(!thr_HCS_rej$in_HCS){
+    confident <- T
+    reject <- decide_reject(samples_unit, sample_mean, thr_unit,
+                            thr_Kval = thr_HCS_rej$K_val, alpha = rej_alpha, lambdas_deno = lambdas_deno)
+  }
+  else if(rej_alpha != accept_alpha){
+    # if the looser confidence interval exclude the threshold (only decide with confidence
+    # if it implies to accept)
+    thr_HCS_acp <- m_in_HCS(samples_unit, m = thr_unit, alpha = accept_alpha , lambdas_deno = lambdas_deno)
+    if(!thr_HCS_acp$in_HCS){
+      if(!decide_reject(samples_unit, sample_mean, thr_unit,
+                        thr_Kval = thr_HCS_acp$K_val, alpha = accept_alpha, lambdas_deno = lambdas_deno)){
+        confident <- T
+        reject <- F
+      }
+    }
+  }
+
+  decision <- list(reject = reject, confident = confident)
+
+  return(decision)
+}
+
+
+
+
+
+
+
+# decide whether to reject
+decide_reject <- function(samples_unit, sample_mean, thr_unit, thr_Kval, alpha,
+                          lambdas_deno, step_init = 1e-4, search_n = 10){
+  # if the sample mean is in the HCCI, use it to make decision
+  if(m_in_HCS(samples_unit, m = sample_mean, alpha = alpha , lambdas_deno = lambdas_deno)$in_HCS){
+    return(sample_mean <= thr_unit)
+  }
+  # explore the local shape of the K function around thr_unit to decide whether the
+  # confidence interval is on its left- or right-hand-side.
+  # this is computationally more expensive and only used as a spare tire.
+  else{
+    step <- step_init
+    for(i in 1:search_n){
+      thr_left <- m_in_HCS(samples_unit, m = thr_unit-step, alpha = alpha , lambdas_deno = lambdas_deno)$K_val
+      thr_right <- m_in_HCS(samples_unit, m = thr_unit+step, alpha = alpha , lambdas_deno = lambdas_deno)$K_val
+      # confidence interval is on the LHS, reject
+      if(thr_left < thr_Kval & thr_Kval < thr_right){
+        return(T)
+      }
+      # confidence interval is on the RHS, don't reject
+      if(thr_left > thr_Kval & thr_Kval > thr_right){
+        return(F)
+      }
+      step <- step / 2
+    }
+    # don't reject (be conservative) if we cannot decide after running out of
+    # computational budget
+    return(F)
+  }
+}
+
 # a technical utility, compute the denominator of lambdas in constructing the
 # confidence sequence.
 lambdas_denominator <- function(X_seq){
@@ -63,75 +142,6 @@ sample_to_unit <- function(samples, sample_bound){
   return(samples)
 }
 
-# decide whether to reject
-decide_reject <- function(samples_unit, sample_mean, thr_unit, thr_Kval, alpha,
-                          lambdas_deno, step_init = 1e-4, search_n = 10){
-  # if the sample mean is in the HCCI, use it to make decision
-  if(m_in_HCS(samples_unit, m = sample_mean, alpha = alpha , lambdas_deno = lambdas_deno)$in_HCS){
-    return(sample_mean <= thr_unit)
-  }
-  # explore the local shape of the K function around thr_unit to decide whether the
-  # confidence interval is on its left- or right-hand-side.
-  # this is computationally more expensive and only used as a spare tire.
-  else{
-    step <- step_init
-    for(i in 1:search_n){
-      thr_left <- m_in_HCS(samples_unit, m = thr_unit-step, alpha = alpha , lambdas_deno = lambdas_deno)$K_val
-      thr_right <- m_in_HCS(samples_unit, m = thr_unit+step, alpha = alpha , lambdas_deno = lambdas_deno)$K_val
-      # confidence interval is on the LHS, reject
-      if(thr_left < thr_Kval & thr_Kval < thr_right){
-        return(T)
-      }
-      # confidence interval is on the RHS, don't reject
-      if(thr_left > thr_Kval & thr_Kval > thr_right){
-        return(F)
-      }
-      step <- step / 2
-    }
-    # don't reject (be conservative) if we cannot decide after running out of
-    # computational budget
-    return(F)
-  }
-}
 
-# decide whether to reject and if we have confidence. Difference confidence level
-# may be used for rejecting/not rejecting.
-make_decision <- function(samples, sample_bound, threshold, rej_alpha, accept_alpha){
-  # transform the samples and threshold to [0,1]
-  samples_unit <- sample_to_unit(samples, sample_bound)
-  thr_unit <- sample_to_unit(threshold, sample_bound)
 
-  sample_mean <- mean(samples_unit)
-  lambdas_deno <- lambdas_denominator(samples_unit)
 
-  # use the sample mean if we can't decide with confidence
-  confident <- F
-  reject <- (sample_mean <= thr_unit)
-
-  # make decision when we have confidence. We assume confidence level (1-rej_alpha)
-  # for rejection is no smaller than the one (1-accept_alpha) for acception.
-
-  # if the tighter confidence interval exclude the threshold
-  thr_HCS_rej <- m_in_HCS(samples_unit, m = thr_unit, alpha = rej_alpha , lambdas_deno = lambdas_deno)
-  if(!thr_HCS_rej$in_HCS){
-    confident <- T
-    reject <- decide_reject(samples_unit, sample_mean, thr_unit,
-                            thr_Kval = thr_HCS_rej$K_val, alpha = rej_alpha, lambdas_deno = lambdas_deno)
-  }
-  else if(rej_alpha != accept_alpha){
-    # if the looser confidence interval exclude the threshold (only decide with confidence
-    # if it implies to accept)
-    thr_HCS_acp <- m_in_HCS(samples_unit, m = thr_unit, alpha = accept_alpha , lambdas_deno = lambdas_deno)
-    if(!thr_HCS_acp$in_HCS){
-      if(!decide_reject(samples_unit, sample_mean, thr_unit,
-                        thr_Kval = thr_HCS_acp$K_val, alpha = accept_alpha, lambdas_deno = lambdas_deno)){
-        confident <- T
-        reject <- F
-      }
-    }
-  }
-
-  decision <- list(reject = reject, confident = confident)
-
-  return(decision)
-}

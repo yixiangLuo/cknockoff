@@ -946,8 +946,8 @@ hist(mc_sample_size_before_stop, breaks = 100)
 p <- 100; n <- 300; k <- 15
 X <- matrix(rnorm(n*p), n)
 nonzero <- sample(p, k)
-# beta <- 1 * (1:p %in% nonzero)
-beta <- 0.2 * (1:p %in% nonzero)
+beta <- 1 * (1:p %in% nonzero)
+# beta <- 0.2 * (1:p %in% nonzero)
 y <- X %*% beta + rnorm(n)
 print(which(1:p %in% nonzero))
 

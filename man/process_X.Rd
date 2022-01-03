@@ -2,7 +2,7 @@
 % Please edit documentation in R/data_processing.R
 \name{process_X}
 \alias{process_X}
-\title{Compute and store useful matrices based on X}
+\title{Compute and store matrices needed by cknockoff() from on X}
 \usage{
 process_X(X, knockoffs = knockoff::create.fixed)
 }
@@ -18,9 +18,9 @@ By default, knockoff::create.fixed is used.}
 \value{
 An object of class "cknockoff.X.pack". This object is a list containing
 many matrices like the knockoff matrix and a basis of the linear space spanned by X, etc.
-The users don't need to work on the object themselves but pass it to the "X.pack"
+Users don't need to work on the object themselves but pass it to the "X.pack"
 parameter in cknockoff() if needed.
 }
 \description{
-Compute and store useful matrices based on X
+Compute and store matrices needed by cknockoff() from on X
 }

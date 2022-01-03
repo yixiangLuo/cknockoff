@@ -5,8 +5,8 @@ NULL
 #' The cKnockoff procedure
 #'
 #' This function apply the cKnockoff procedure to the data under linear model,
-#' selecting important features with FDR control. It has power dominating knockoff
-#' via conditional calibration.
+#' selecting important features with FDR control. It has power dominating fixed-X
+#' knockoff via conditional calibration.
 #'
 #' @param X n-by-p matrix or data frame of predictors.
 #' @param y response vector of length n.
@@ -15,7 +15,8 @@ NULL
 #' matrix of knockoff variables.
 #' It is the same as the \code{knockoffs} parameter in \href{knockoff}{https://cran.r-project.org/web/packages/knockoff/}\code{::knockoff.filter}.
 #' By default, \code{knockoff::create.fixed} is used.
-#' @param statistic the knockoff W-statistics used to assess variable importance.
+#' @param statistic the knockoff feature statistics (W-statistics) function used
+#' to assess variable importance.
 #' Any statistic function in \href{knockoff}{https://cran.r-project.org/web/packages/knockoff/}
 #' can be passed via this parameter.
 #' But please be aware of efficiency issue as this function will be called
@@ -23,19 +24,25 @@ NULL
 #' our package.
 #' By default, a lasso statistic from our package is used.
 #' @param alpha target false discovery rate (default: 0.05).
+#' @param Rhat_refine A logical value determine if we use a betrer estimation of
+#' the number of rejections in calibration. If \code{TRUE}, the procedure is
+#' cKnockoff* and otherwise the plain cKnockoff. The default is \code{TRUE}.
 #' @param n_cores the number of cores used in computing cKnockoff in parallel.
 #' package \code{doParallel} is required if \code{n_cores} > 1.
 #' Otherwise it's computed sequentially.
-#' @param knockoff.type implies whether fixed-X or model-X knockoff is used.
-#' Currently only supports fixed-X knockoff.
-#' As a result, the parameter \code{knockoffs} has to be those for fixed-X.
 #' @param prelim_result either a \code{knockoff.result} object returned by
 #' \code{knockoff::knockoff.filter} or a \code{cknockoff.result} object returned
 #' by \code{cknockoff}.
 #' cknockoff can read the information from the knockoff result or previous
 #' cknockoff result and make possibly more rejections under the same FDR control.
-#' When supplied, all other parameters are not needed.
-#' @param X.pack An object of class "cknockoff.X.pack" returned by \code{process_X}.
+#' When supplied, all other parameters are not needed and will be overwritten.
+#'
+#' It's possible that cknockoff cannot fetch the function
+#' \code{statistic} or value \code{alpha} by their names from a
+#' \code{knockoff.result} object. If that is the case, please supply them to
+#' cknockoff via arguments.
+#' @param X.pack An object of class "cknockoff.X.pack" returned by function
+#' \code{process_X}.
 #' This is used only for simulations studies, where cknockoff is applied many
 #' times to the same fixed X, to accelerate computation. General users should
 #' ignore it and leave it as default = NULL.
@@ -47,8 +54,9 @@ NULL
 #'  \item{y}{response vector (possibly augmented)}
 #'  \item{kn.statistic}{the knockoff W statistics}
 #'  \item{selected}{named vector of selected variables}
+#'  \item{sign_predict}{the predicted signs of beta}
 #'  \item{record}{a list recording information used to assist computing from
-#'   "prelim_result". Users should not worry or care about it.}
+#'   "prelim_result". Users may ignore it.}
 #'
 #' @details
 #'
@@ -78,7 +86,7 @@ NULL
 #' p <- 100; n <- 300; k <- 15
 #' X <- matrix(rnorm(n*p), n)
 #' nonzero <- sample(p, k)
-#' beta <- 3.5 * (1:p %in% nonzero)
+#' beta <- 2.5 * (1:p %in% nonzero)
 #' y <- X %*% beta + rnorm(n)
 #' print(which(1:p %in% nonzero))
 #'
@@ -93,19 +101,23 @@ NULL
 #'                              statistic = stat.glmnet_coefdiff_lm,
 #'                              fdr = 0.05)
 #' print(kn.result$selected)
+#'
 #' result <- cknockoff(prelim_result = kn.result, n_cores = 2)
 #' print(result$selected)
+#'
 #' result <- cknockoff(prelim_result = result)
+#' print(result$selected)
+#'
+#' result <- cknockoff(prelim_result = result, n_cores = 2, Rhat_refine = T)
 #' print(result$selected)
 cknockoff <- function(X, y,
                       knockoffs = knockoff::create.fixed,
                       statistic = stat.glmnet_coefdiff_lm,
                       alpha = 0.05,
+                      Rhat_refine = F,
                       n_cores = 1,
-                      knockoff.type = c("fixed", "model"),
                       prelim_result = NULL,
-                      X.pack = NULL,
-                      Rhat_refine = F){
+                      X.pack = NULL){
 
   mc_rounds <- 5
   mc_size <- 100  # must be even as paring samples is employed
@@ -120,7 +132,8 @@ cknockoff <- function(X, y,
   # args <- eval(cknockoff.call)
   envir <- parent.frame()
   args <- parse_args(X, y, knockoffs, statistic,
-                     alpha, n_cores, knockoff.type,
+                     alpha, Rhat_refine,
+                     n_cores,
                      prelim_result, X.pack,
                      envir = envir)
 
@@ -134,6 +147,7 @@ cknockoff <- function(X, y,
   statistic <- args$statistic
   alpha <- args$alpha
   n_cores <- args$n_cores
+  Rhat_refine <- args$Rhat_refine
   record <- args$record
 
   forall <- args$parallel$iterator
@@ -397,6 +411,7 @@ cknockoff <- function(X, y,
                  kn.selected = kn_selected,
                  checked_so_far = checked_so_far,
                  next_check_num = min(p - length(checked_so_far), max(5, length(candidates))),
+                 Rhat_refine = Rhat_refine,
                  X.pack = X.pack)
 
   # prepare the result
@@ -416,37 +431,10 @@ cknockoff <- function(X, y,
 
 
 
-couple_samples <- function(n, p, cali_rej_set, kn_rej_set){
-  df <- n-p
+## inner functions that compute important quantities in cknockoff()
 
-  # compute mass of the calibration rejection set
-  rej_set <- cali_rej_set
-  if(!is.null(rej_set$left)){
-    cali_rej_lb <- pt(rej_set$left, df = df, lower.tail = T)
-    cali_rej_ub <- pt(rej_set$right, df = df, lower.tail = T)
-    rej_mass <- sum(cali_rej_ub - cali_rej_lb)
-  } else{
-    return(F)
-  }
-
-  # compute mass of the rest rejection set
-  rest_set <- interval_minus(kn_rej_set, cali_rej_set)
-  if(!is.null(rest_set$left)){
-    cali_rest_lb <- pt(rest_set$left, df = df, lower.tail = T)
-    cali_rest_ub <- pt(rest_set$right, df = df, lower.tail = T)
-    rest_mass <- sum(cali_rest_ub - cali_rest_lb)
-  } else{
-    return(F)
-  }
-
-  # if rej_mass and rest_mass are not far from each other, couple the samples to reduce vairance
-  # otherwise don't to avoid over sampling in a relatively small region
-  threshold <- 3
-  sample_coupling <- (rej_mass / rest_mass <= threshold) && (rest_mass / rej_mass <= threshold)
-
-  return(sample_coupling)
-}
-
+# Replace some R^kn by R^* to do cKnockoff* after computing the f_j for cKnockoff,
+# see Appendix of the cKnockoff paper for details
 post_refine_Rhat <- function(sample_res, record_mc,
                              mc_used, n_Ej_samples,
                              Ej_mc, Ej_samples,
@@ -523,6 +511,7 @@ post_refine_Rhat <- function(sample_res, record_mc,
               Ej_mc = Ej_mc, Ej_samples = Ej_samples))
 }
 
+# estimate the smallest number of R^* to make j rejected
 calc_Rhat_to_rej_j <- function(sample_weights, record_mc, Rhat_index){
   # the values in fj that Rhat refinement cannot change
   other_value <- sum(record_mc$DPj[-Rhat_index] * sample_weights[-Rhat_index]) - sum(record_mc$bj * sample_weights)
@@ -535,6 +524,7 @@ calc_Rhat_to_rej_j <- function(sample_weights, record_mc, Rhat_index){
   return(Rhat_to_rej)
 }
 
+# compute R^* efficiently
 cknockoff_Rhat <- function(X.pack, y, j_exclude,
                            kn_stats_obs,
                            sigmahat_XXk_res,
@@ -654,7 +644,7 @@ cknockoff_Rhat <- function(X.pack, y, j_exclude,
   return(list(selected = selected, Rhat = length(union(selected, j_exclude))))
 }
 
-
+# compute f_j
 calc_fj <- function(j,
                     alpha, kn_stat_mc,
                     cali_stat_obs, cali_stat_mc,

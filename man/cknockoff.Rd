@@ -10,9 +10,8 @@ cknockoff(
   knockoffs = knockoff::create.fixed,
   statistic = stat.glmnet_coefdiff_lm,
   alpha = 0.05,
-  kappa = 1,
+  Rhat_refine = F,
   n_cores = 1,
-  knockoff.type = c("fixed", "model"),
   prelim_result = NULL,
   X.pack = NULL
 )
@@ -28,7 +27,8 @@ matrix of knockoff variables.
 It is the same as the \code{knockoffs} parameter in \href{knockoff}{https://cran.r-project.org/web/packages/knockoff/}\code{::knockoff.filter}.
 By default, \code{knockoff::create.fixed} is used.}
 
-\item{statistic}{the knockoff W-statistics used to assess variable importance.
+\item{statistic}{the knockoff feature statistics (W-statistics) function used
+to assess variable importance.
 Any statistic function in \href{knockoff}{https://cran.r-project.org/web/packages/knockoff/}
 can be passed via this parameter.
 But please be aware of efficiency issue as this function will be called
@@ -38,26 +38,28 @@ By default, a lasso statistic from our package is used.}
 
 \item{alpha}{target false discovery rate (default: 0.05).}
 
-\item{kappa}{a real number between 0 and 1 controlling how should we hybridize
-knockoff with Bonferroni in cKnockoff.
-By default, kappa = 1, meaning we don't hybridize and use knockoff only.}
+\item{Rhat_refine}{A logical value determine if we use a betrer estimation of
+the number of rejections in calibration. If \code{TRUE}, the procedure is
+cKnockoff* and otherwise the plain cKnockoff. The default is \code{TRUE}.}
 
 \item{n_cores}{the number of cores used in computing cKnockoff in parallel.
 package \code{doParallel} is required if \code{n_cores} > 1.
 Otherwise it's computed sequentially.}
-
-\item{knockoff.type}{implies whether fixed-X or model-X knockoff is used.
-Currently only supports fixed-X knockoff.
-As a result, the parameter \code{knockoffs} has to be those for fixed-X.}
 
 \item{prelim_result}{either a \code{knockoff.result} object returned by
 \code{knockoff::knockoff.filter} or a \code{cknockoff.result} object returned
 by \code{cknockoff}.
 cknockoff can read the information from the knockoff result or previous
 cknockoff result and make possibly more rejections under the same FDR control.
-When supplied, all other parameters are not needed.}
+When supplied, all other parameters are not needed and will be overwritten.
 
-\item{X.pack}{An object of class "cknockoff.X.pack" returned by \code{process_X}.
+It's possible that cknockoff cannot fetch the function
+\code{statistic} or value \code{alpha} by their names from a
+\code{knockoff.result} object. If that is the case, please supply them to
+cknockoff via arguments.}
+
+\item{X.pack}{An object of class "cknockoff.X.pack" returned by function
+\code{process_X}.
 This is used only for simulations studies, where cknockoff is applied many
 times to the same fixed X, to accelerate computation. General users should
 ignore it and leave it as default = NULL.}
@@ -70,24 +72,16 @@ to the "knockoff.result" object, containing essentially the same information:
 \item{y}{response vector (possibly augmented)}
 \item{kn.statistic}{the knockoff W statistics}
 \item{selected}{named vector of selected variables}
+\item{sign_predict}{the predicted signs of beta}
 \item{record}{a list recording information used to assist computing from
-"prelim_result". Users should not worry or care about it.}
+"prelim_result". Users may ignore it.}
 }
 \description{
 This function apply the cKnockoff procedure to the data under linear model,
-selecting important features with FDR control. It has power dominating knockoff
-via conditional calibration.
+selecting important features with FDR control. It has power dominating fixed-X
+knockoff via conditional calibration.
 }
 \details{
-#' The parameter \code{kappa} controls how Knockoff and Bonferroni is hybridized
-in cKnockoff.
-As kappa get closer to 1, cKnockoff behave more like Knockoff:
-relying on the knockoff W statistics heavier.
-While as kappa get closer to 0, cKnockoff behave more like Bonferroni:
-relying on the p-values heavier.
-In particular, cKnockoff(alpha; kappa) almost surely dominates
-Knockoff(fdr = kappa \* alpha) union Bonferroni(fdr = (1-kappa) \* alpha).
-
 If parameter "prelim_result" is supplied, all the other parameters except
 "n_cores" will be overwritten by the information extracted from it.
 
@@ -110,8 +104,9 @@ The computational time of each call should be similar.
 p <- 100; n <- 300; k <- 15
 X <- matrix(rnorm(n*p), n)
 nonzero <- sample(p, k)
-beta <- 3.5 * (1:p \%in\% nonzero)
-y = X \%*\% beta + rnorm(n)
+beta <- 2.5 * (1:p \%in\% nonzero)
+y <- X \%*\% beta + rnorm(n)
+print(which(1:p \%in\% nonzero))
 
 # Basic usage
 result <- cknockoff(X, y, alpha = 0.05, n_cores = 1)
@@ -124,9 +119,14 @@ kn.result <- knockoff.filter(X, y,
                              statistic = stat.glmnet_coefdiff_lm,
                              fdr = 0.05)
 print(kn.result$selected)
+
 result <- cknockoff(prelim_result = kn.result, n_cores = 2)
 print(result$selected)
+
 result <- cknockoff(prelim_result = result)
+print(result$selected)
+
+result <- cknockoff(prelim_result = result, n_cores = 2, Rhat_refine = T)
 print(result$selected)
 }
 \references{

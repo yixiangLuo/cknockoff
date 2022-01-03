@@ -1,6 +1,6 @@
 
 
-
+# compute the t-statisitcs from y in the linear model
 y_to_t <- function(y, vj_mat, sigmahat){
   y <- matrix(y, nrow = 1)
   v_y <- y %*% vj_mat
@@ -102,7 +102,7 @@ interval_minus <- function(intervals1, intervals2){
   }
 }
 
-# if x is in intervals
+# check if x is in intervals
 x_in_intervals <- function(x, intervals){
   if(is.null(intervals$left)){
     return(FALSE)
@@ -118,7 +118,8 @@ x_in_intervals <- function(x, intervals){
 
 
 
-# only take one iterator
+# sequence generator for a sequential iterator,
+# need such format similar to the one used in foreach
 iterate_seq <- function(...){
   arg <- list(...)[1]
   argname <- names(arg)
@@ -127,6 +128,8 @@ iterate_seq <- function(...){
   return(list(arg = arg, argname = argname))
 }
 
+# binary operator for a sequential iterator,
+# need such format similar to the one used in foreach
 `%do_seq%` <- function(obj, expr){
   result <- NULL
   if(length(obj$arg) > 0){
@@ -155,14 +158,14 @@ with_seed = function(seed, expr) {
   expr
 }
 
-# borrowed from https://stackoverflow.com/a/43329945
-match.call.defaults <- function(...) {
-  call <- evalq(match.call(expand.dots = FALSE), parent.frame(1))
-  formals <- evalq(formals(), parent.frame(1))
-
-  for(i in setdiff(names(formals), names(call)))
-    call[i] <- list( formals[[i]] )
-
-
-  match.call(sys.function(sys.parent()), call)
-}
+# # borrowed from https://stackoverflow.com/a/43329945
+# match.call.defaults <- function(...) {
+#   call <- evalq(match.call(expand.dots = FALSE), parent.frame(1))
+#   formals <- evalq(formals(), parent.frame(1))
+#
+#   for(i in setdiff(names(formals), names(call)))
+#     call[i] <- list( formals[[i]] )
+#
+#
+#   match.call(sys.function(sys.parent()), call)
+# }

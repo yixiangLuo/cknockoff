@@ -1,7 +1,10 @@
+# parse the arguments supplied to cknockoff()
 parse_args <- function(X, y, knockoffs, statistic,
-                       alpha, n_cores, knockoff.type,
-                       prelim_result, X.pack, envir){
-
+                       alpha, Rhat_refine,
+                       n_cores,
+                       prelim_result, X.pack,
+                       envir){
+  # when cknockoff.result is supplied
   if(is(prelim_result, "cknockoff.result")){
     X <- prelim_result$X
     y <- prelim_result$y
@@ -9,15 +12,21 @@ parse_args <- function(X, y, knockoffs, statistic,
     statistic <- prelim_result$record$statistic
     alpha <- prelim_result$record$alpha
     X.pack <- prelim_result$record$X.pack
+
     record <- c(prelim_result$record[c("iteration", "kn.selected",
                                        "checked_so_far", "next_check_num")],
                 list(kn.statistic = prelim_result$kn.statistic,
                      selected_so_far = prelim_result$selected))
 
+    # make Rhat_refine=T if previously set TRUE, else make the non-rejected unchecked
+    if(prelim_result$record$Rhat_refine == T) Rhat_refine <- T
+    else if(Rhat_refine == T) record$checked_so_far <- prelim_result$selected
+
     if(evalq(missing(n_cores), parent.frame())){
       n_cores <- prelim_result$record$n_cores
     }
   }
+  # when knockoff.result is supplied
   else if(is(prelim_result, "knockoff.result")){
     X <- prelim_result$X
     y <- prelim_result$y
@@ -27,6 +36,7 @@ parse_args <- function(X, y, knockoffs, statistic,
                    kn.statistic = prelim_result$statistic,
                    kn.selected = prelim_result$selected)
 
+    # try fetch the values of statistic and alpha by their names
     statistic_missing <- evalq(missing(statistic), parent.frame())
     tryCatch(
       {
@@ -74,9 +84,10 @@ parse_args <- function(X, y, knockoffs, statistic,
 
   return(list(X = X, y = y, knockoffs = knockoffs, statistic = statistic,
               alpha = alpha, n_cores = n_cores, X.pack = X.pack,
-              record = record))
+              Rhat_refine = Rhat_refine,record = record))
 }
 
+# check if the arguments are valid
 check_args <- function(args){
   # Validate input types
   if(!is.data.frame(args$X) && !is.matrix(args$X)){
@@ -123,6 +134,7 @@ check_args <- function(args){
   invisible()
 }
 
+# preprocess the X and y for better efficiency
 process_args <- function(args){
   if(!is(args$X.pack, "cknockoff.X.pack")){
     args$X.pack <- process_X(args$X, knockoffs = args$knockoffs)
@@ -146,7 +158,7 @@ process_args <- function(args){
 }
 
 
-#' Compute and store useful matrices based on X
+#' Compute and store matrices needed by cknockoff() from on X
 #'
 #' @param X X n-by-p matrix of original variables.
 #' @param knockoffs either knockoff matrix of X or a knockoffs function that can
@@ -157,12 +169,13 @@ process_args <- function(args){
 #'
 #' @return An object of class "cknockoff.X.pack". This object is a list containing
 #' many matrices like the knockoff matrix and a basis of the linear space spanned by X, etc.
-#' The users don't need to work on the object themselves but pass it to the "X.pack"
+#' Users don't need to work on the object themselves but pass it to the "X.pack"
 #' parameter in cknockoff() if needed.
 #' @export
 #'
 #' @examples
 process_X <- function(X, knockoffs = knockoff::create.fixed){
+  # validate the arguments
   if(NCOL(X) <= 1){
     stop("X must have at least two columns.")
   }
@@ -223,6 +236,7 @@ process_X <- function(X, knockoffs = knockoff::create.fixed){
   #   X_kn <- MRC_Xkn(X, method = method, normalize = T)
   # }
 
+  # compute the basis matrices need by cknockoff
   QR <- qr(cbind(X, X_kn))
 
   pivot_back <- 1:p
@@ -236,6 +250,7 @@ process_X <- function(X, knockoffs = knockoff::create.fixed){
   }
 
   if(!identical(QR$pivot[1:p], 1:p)){
+    # if unintended pivoting happens, use process_X_robust instead
     X.pack.data <- process_X_robust(X, X_kn)
   } else{
     X_basis <- Q_XXk[, 1:p]
@@ -267,6 +282,7 @@ process_X <- function(X, knockoffs = knockoff::create.fixed){
 
 }
 
+# implement the same function as process_X() in a more robust but less efficient way
 process_X_robust <- function(X, X_kn){
   n <- NROW(X)
   p <- NCOL(X)
@@ -310,6 +326,7 @@ process_X_robust <- function(X, X_kn){
   return(X.pack.data)
 }
 
+# pre-process y
 process_y <- function(X.pack, y, randomize = F){
 
   n <- NROW(X.pack$X)
@@ -322,6 +339,7 @@ process_y <- function(X.pack, y, randomize = F){
   y_Pi_X <- X.pack$X_basis %*% t(y %*% X.pack$X_basis[1:y.org.nrow, ])
   y_Pi_X_res_norm2 <- sum(y^2) - sum(y_Pi_X^2)
 
+  # augment y if needed
   if(y.org.nrow < 2*p){
     if(randomize){
       y.extra <- rnorm(2*p-y.org.nrow,
@@ -337,8 +355,8 @@ process_y <- function(X.pack, y, randomize = F){
   }
   y_Pi_X_res_norm2 <- sum(y^2) - sum(y_Pi_X^2)
 
+  # prepare the quantities needed by cknockoff based on y
   y <- matrix(y, nrow = 1)
-
 
   vjy_obs <- c(y %*% X.pack$vj_mat)
 
@@ -349,6 +367,7 @@ process_y <- function(X.pack, y, randomize = F){
   y_Pi_Xnoj_res_norm2 <- y_Pi_X_res_norm2 + vjy_obs^2
   sigmahat_XXk_res <- sqrt((y_Pi_X_res_norm2 - sum((y %*% X.pack$X_res_Xk_basis)^2)) / (n - 2*p))
 
+  # placeholder, will be computed later in cknockoff()
   Xy_bias <- rep(NA, p)
 
   return(list(n = n, p = p, df = df, y = as.vector(y), vjy_obs = vjy_obs,
@@ -358,6 +377,7 @@ process_y <- function(X.pack, y, randomize = F){
               Xy_bias = Xy_bias))
 }
 
+# load packages and prepare snips for parallel computing
 process_parallel <- function(n_cores){
   if(n_cores > 1 && !requireNamespace("doParallel", quietly=T)) {
     warning("doParallel is not installed. Using sequential computing instead.", call. = F, immediate. = T)

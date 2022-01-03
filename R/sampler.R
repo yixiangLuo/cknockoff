@@ -104,8 +104,41 @@ y_sampler_cond_Sj <- function(sample_size, cali_rej_reg, kn_rej_reg, j,
 }
 
 
+# determine should we couple the Monte-Carlo samples in computing E_j to improve
+# efficiency
+couple_samples <- function(n, p, cali_rej_set, kn_rej_set){
+  df <- n-p
 
-# the set of tval[j] where Hj rejected by calibration conditional on Sj
+  # compute mass of the calibration rejection set
+  rej_set <- cali_rej_set
+  if(!is.null(rej_set$left)){
+    cali_rej_lb <- pt(rej_set$left, df = df, lower.tail = T)
+    cali_rej_ub <- pt(rej_set$right, df = df, lower.tail = T)
+    rej_mass <- sum(cali_rej_ub - cali_rej_lb)
+  } else{
+    return(F)
+  }
+
+  # compute mass of the rest rejection set
+  rest_set <- interval_minus(kn_rej_set, cali_rej_set)
+  if(!is.null(rest_set$left)){
+    cali_rest_lb <- pt(rest_set$left, df = df, lower.tail = T)
+    cali_rest_ub <- pt(rest_set$right, df = df, lower.tail = T)
+    rest_mass <- sum(cali_rest_ub - cali_rest_lb)
+  } else{
+    return(F)
+  }
+
+  # if rej_mass and rest_mass are not far from each other, couple the samples to
+  # reduce vairance, otherwise don't to avoid over sampling in a relatively
+  # small region
+  threshold <- 3
+  sample_coupling <- (rej_mass / rest_mass <= threshold) && (rest_mass / rej_mass <= threshold)
+
+  return(sample_coupling)
+}
+
+# find the set of tval[j] where Hj rejected by calibration conditional on Sj
 where_cali_rej <- function(j, y.pack, X.pack){
   df <- y.pack$df
   y_Pi_Xnoj_res_norm2 <- y.pack$y_Pi_Xnoj_res_norm2[j]
@@ -150,6 +183,7 @@ where_kn_rej <- function(kn_alpha, j, y.pack, X.pack,
                                         statistic)
   }
 
+  # solve for the region where kn_abs_stat_j >= kn_stat_thr
   vjy_region <- region_F1geqF2(kn_stat_samples$vjy_nodes,
                                kn_stat_samples$kn_abs_stat_j,
                                kn_stat_samples$kn_stat_thr,
@@ -237,6 +271,7 @@ kn_stat_sampling <- function(kn_alpha, j, y.pack, X.pack, node_num = 10,
               kn_stat_thrs = kn_stat_thrs))
 }
 
+# solve for the region where F1 >= F2
 region_F1geqF2 <- function(x, y1, y2, method, n_eval = 100){
   # linear interpolation
   if(method == "lin_interp"){
@@ -298,11 +333,12 @@ region_F1geqF2 <- function(x, y1, y2, method, n_eval = 100){
 }
 
 
-
+# convert vj^T y to corresponding t-statistic
 vjy_to_tj <- function(vjy, y_Pi_Xnoj_res_norm2, df){
   tj <- vjy / sqrt((y_Pi_Xnoj_res_norm2 - vjy^2) / df)
 }
 
+# convert t-statistic t_j to corresponding vj^T y
 tj_to_vjy <- function(tj, y_Pi_Xnoj_res_norm2, df){
   vjy <-  tj * sqrt(y_Pi_Xnoj_res_norm2 / (tj^2 + df))
 }

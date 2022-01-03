@@ -1,29 +1,3 @@
-# weighted BH method
-BH_weighted <- function(pvals, alpha,
-                        weights = rep(1, length(pvals)) / length(pvals)){
-  n <- length(pvals)
-
-  adjust_pvals <- sort(pvals / weights) / (1:n)
-  nrejs <- max(0, which(adjust_pvals <= alpha))
-
-  rejs <- which(pvals <= nrejs * alpha * weights)
-
-  return(list(nrejs = nrejs, rejs = rejs))
-}
-
-# q-values of BH
-qvals_BH <- function(pvals){
-  p <- length(pvals)
-  fac <- 1:p
-  ord <- order(pvals)
-
-  adjust_pvals <- cummin(rev(pvals[ord] * p / fac))
-  qvals <- rep(NA, p)
-  qvals[ord] <- rev(adjust_pvals)
-
-  return(qvals)
-}
-
 # pick the promising features from the unchecked ones
 cKn_candidates <- function(kn.stats, pvals, alpha, record, selected){
   # when cknockoff is run the first time
@@ -54,6 +28,7 @@ cKn_candidates <- function(kn.stats, pvals, alpha, record, selected){
     }
   }
 
+  # # more screening: only keep those knockoff prefers
   # candidates <- sapply(candidates, function(candidate){
   #   prefer <- kn_prefer(candidate, kn.stats, alpha)
   #   if(prefer) return(candidate)
@@ -63,3 +38,32 @@ cKn_candidates <- function(kn.stats, pvals, alpha, record, selected){
 
   return(candidates)
 }
+
+
+# weighted BH method
+BH_weighted <- function(pvals, alpha,
+                        weights = rep(1, length(pvals)) / length(pvals)){
+  n <- length(pvals)
+
+  adjust_pvals <- sort(pvals / weights) / (1:n)
+  nrejs <- max(0, which(adjust_pvals <= alpha))
+
+  rejs <- which(pvals <= nrejs * alpha * weights)
+
+  return(list(nrejs = nrejs, rejs = rejs))
+}
+
+# q-values of BH
+qvals_BH <- function(pvals){
+  p <- length(pvals)
+  fac <- 1:p
+  ord <- order(pvals)
+
+  adjust_pvals <- cummin(rev(pvals[ord] * p / fac))
+  qvals <- rep(NA, p)
+  qvals[ord] <- rev(adjust_pvals)
+
+  return(qvals)
+}
+
+

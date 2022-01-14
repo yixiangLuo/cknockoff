@@ -4,83 +4,98 @@ NULL
 
 #' The cKnockoff procedure
 #'
-#' This function apply the cKnockoff procedure to the data under linear model,
-#' selecting important features with FDR control. It has power dominating fixed-X
-#' knockoff via conditional calibration.
+#' This function applies the cKnockoff procedure to the data \eqn{(X, y)}
+#' subjecting to the Gaussian linear model, selecting variables/features
+#' relevant for predicting the outcome with FDR control.
 #'
-#' @param X n-by-p matrix or data frame of predictors.
+#' @param X n-by-p matrix or data frame of features.
 #' @param y response vector of length n.
-#' @param knockoffs knockoffs method used to construct the knockoff matrix for X.
+#' @param knockoffs method used to construct the knockoff matrix for X.
 #' It should be a function taking a n-by-p matrix as input and returning a n-by-p
 #' matrix of knockoff variables.
-#' It is the same as the \code{knockoffs} parameter in \href{knockoff}{https://cran.r-project.org/web/packages/knockoff/}\code{::knockoff.filter}.
+#' It is the same as the \code{knockoffs} argument in
+#' \code{knockoff::knockoff.filter}.
 #' By default, \code{knockoff::create.fixed} is used.
 #' @param statistic the knockoff feature statistics (W-statistics) function used
 #' to assess variable importance.
-#' Any statistic function in \href{knockoff}{https://cran.r-project.org/web/packages/knockoff/}
-#' can be passed via this parameter.
-#' But please be aware of efficiency issue as this function will be called
-#' repeatedly in cknockoff. We suggest use the statistic functions supplied by
+#' Any function in the family "statistics" in the R package \code{knockoff} that
+#' are suitable for the fixed-X setting can be supplied to this argument.
+#' But please be aware of the efficiency issue as this function will be called
+#' repeatedly in cknockoff. We suggest use the statistic functions provided by
 #' our package.
 #' By default, a lasso statistic from our package is used.
-#' @param alpha target false discovery rate (default: 0.05).
-#' @param Rhat_refine A logical value determine if we use a betrer estimation of
-#' the number of rejections in calibration. If \code{TRUE}, the procedure is
-#' cKnockoff* and otherwise the plain cKnockoff. The default is \code{TRUE}.
-#' @param n_cores the number of cores used in computing cKnockoff in parallel.
+#' @param alpha  nominal false discovery rate (default: 0.05).
+#' @param Rstar_refine A logical value determining if we use a better estimation
+#' of the number of rejections in calibration.
+#' If \code{TRUE}, the procedure is cKnockoff* and otherwise is the vanilla
+#' cKnockoff.
+#' The default is \code{FALSE}.
+#' @param n_cores the number of cores to be used in computing cKnockoff in parallel.
 #' package \code{doParallel} is required if \code{n_cores} > 1.
 #' Otherwise it's computed sequentially.
 #' @param prelim_result either a \code{knockoff.result} object returned by
 #' \code{knockoff::knockoff.filter} or a \code{cknockoff.result} object returned
 #' by \code{cknockoff}.
-#' cknockoff can read the information from the knockoff result or previous
-#' cknockoff result and make possibly more rejections under the same FDR control.
-#' When supplied, all other parameters are not needed and will be overwritten.
+#' cknockoff can read the information from a knockoff result or a cknockoff
+#' result and make possibly more rejections with the same FDR control.
+#' See more details below.
 #'
-#' It's possible that cknockoff cannot fetch the function
-#' \code{statistic} or value \code{alpha} by their names from a
-#' \code{knockoff.result} object. If that is the case, please supply them to
-#' cknockoff via arguments.
-#' @param X.pack An object of class "cknockoff.X.pack" returned by function
+#' @param X.pack An object of class \code{cknockoff.X.pack} returned by function
 #' \code{process_X}.
 #' This is used only for simulations studies, where cknockoff is applied many
-#' times to the same fixed X, to accelerate computation. General users should
-#' ignore it and leave it as default = NULL.
+#' times to the same fixed X, to accelerate computation.
+#' General users should ignore it and leave it as default = NULL.
+#' If X.pack is provided, the argument "knockoffs" is not needed and will be
+#' overwritten.
 #'
-#' @return An object of class "cknockoff.result". This object is a list similar
-#' to the "knockoff.result" object, containing essentially the same information:
+#' @return An object of class \code{cknockoff.result}. It is a list similar
+#' to the \code{knockoff.result} object, containing essentially the same
+#' information:
 #'  \item{X}{matrix of original variables (scaled and possibly augmented)}
-#'  \item{Xk}{matrix of knockoff variables (cooresponding the the returned X)}
+#'  \item{Xk}{matrix of knockoff variables (cooresponding to the returned X)}
 #'  \item{y}{response vector (possibly augmented)}
-#'  \item{kn.statistic}{the knockoff W statistics}
+#'  \item{kn.statistic}{the knockoff feature statistics}
 #'  \item{selected}{named vector of selected variables}
 #'  \item{sign_predict}{the predicted signs of beta}
-#'  \item{record}{a list recording information used to assist computing from
-#'   "prelim_result". Users may ignore it.}
+#'  \item{record}{a list recording some information during the calculation. It
+#'  aims to make computing based on "prelim_result" possible and easy.
+#'  Users may ignore it.}
 #'
 #' @details
 #'
-#' If parameter "prelim_result" is supplied, all the other parameters except
-#' "n_cores" will be overwritten by the information extracted from it.
+#' If argument \code{prelim_result} is supplied with a object, all the other
+#' parameters except \code{n_cores} and \code{Rstar_refine} will be overwritten
+#' by the information retrieved from it.
 #'
-#' If a \code{knockoff.result} object is supplied, cknockoff will return possibly
-#' more selections on the same problem with the same FDR control.
-#' To use, the function call of \code{knockoff::knockoff.filter} that generates
-#' such \code{knockoff.result} object should specify parameters \code{statistic}
-#' and \code{fdr} explicitly (rather than relying on the default).
+#' If a \code{knockoff.result} object is supplied to \code{prelim_result},
+#' cknockoff will return possibly more selections on the same problem with the
+#' same FDR control.
+#' To use, the function call of \code{knockoff::knockoff.filter} that returned
+#' such \code{knockoff.result} object must have arguments "statistic"
+#' and "fdr" explicitly provided (rather than relying on their defaults).
+#' See examples below.
+#'
+#' It's possible that cknockoff cannot fetch the function
+#' "statistic" or value for "alpha" by their names from a
+#' \code{knockoff.result} object.
+#' If this is the case, please supply them to cknockoff explicitly via arguments.
 #'
 #' It's possible to even make more rejections based on a \code{cknockoff.result}
 #' object. This is because cknockoff will only explore those promising features
 #' and discards the others, say those with large p-values.
 #' Calling cknockoff() on a \code{cknockoff.result} object would further
 #' explore some most promising ones among the discarded features and (rarely)
-#' possibly make several more rejections. You can do this recursively and FDR is
-#' proved to be controlled whenever you decide to stop.
+#' possibly make several more rejections.
+#' Users can do this recursively and FDR is proved to be controlled whenever
+#' they decide to stop.
 #' The computational time of each call should be similar.
 #'
-#' @references
+#' If the \code{cknockoff.result} object is obtained by setting
+#' \code{Rstar_refine = FALSE}, more rejections may be made with the same FDR
+#' control by supplying \code{cknockoff.result} to \code{prelim_result} and set
+#' \code{Rstar_refine = TRUE}. See examples below.
 #'
-#' @export
+#' @references
 #'
 #' @examples
 #' p <- 100; n <- 300; k <- 15
@@ -94,27 +109,35 @@ NULL
 #' result <- cknockoff(X, y, alpha = 0.05, n_cores = 1)
 #' print(result$selected)
 #'
-#' # improve knockoff and previous cknockoff result
+#' # knockoff rejection
 #' library("knockoff")
 #' kn.result <- knockoff.filter(X, y,
 #'                              knockoffs = create.fixed,
 #'                              statistic = stat.glmnet_coefdiff_lm,
-#'                              fdr = 0.05)
+#'                              # must specify this argument explicitly
+#'                              fdr = 0.05
+#'                              # must specify this argument explicitly
+#'                              )
 #' print(kn.result$selected)
 #'
+#' # improve knockoff result
 #' result <- cknockoff(prelim_result = kn.result, n_cores = 2)
 #' print(result$selected)
 #'
+#' # improve previous cknockoff result
 #' result <- cknockoff(prelim_result = result)
 #' print(result$selected)
 #'
-#' result <- cknockoff(prelim_result = result, n_cores = 2, Rhat_refine = T)
+#' # improve previous cknockoff result with cknockoff*
+#' result <- cknockoff(prelim_result = result, n_cores = 2, Rstar_refine = TRUE)
 #' print(result$selected)
+#'
+#' @export
 cknockoff <- function(X, y,
                       knockoffs = knockoff::create.fixed,
                       statistic = stat.glmnet_coefdiff_lm,
                       alpha = 0.05,
-                      Rhat_refine = F,
+                      Rstar_refine = F,
                       n_cores = 1,
                       prelim_result = NULL,
                       X.pack = NULL){
@@ -122,8 +145,8 @@ cknockoff <- function(X, y,
   mc_rounds <- 5
   mc_size <- 100  # must be even as paring samples is employed
 
-  Rhat_max_try <- 3
-  Rhat_calc_max_step <- 3
+  Rstar_max_try <- 3
+  Rstar_calc_max_step <- 3
 
   # knockoff.type <- match.arg(knockoff.type)
 
@@ -132,7 +155,7 @@ cknockoff <- function(X, y,
   # args <- eval(cknockoff.call)
   envir <- parent.frame()
   args <- parse_args(X, y, knockoffs, statistic,
-                     alpha, Rhat_refine,
+                     alpha, Rstar_refine,
                      n_cores,
                      prelim_result, X.pack,
                      envir = envir)
@@ -147,7 +170,7 @@ cknockoff <- function(X, y,
   statistic <- args$statistic
   alpha <- args$alpha
   n_cores <- args$n_cores
-  Rhat_refine <- args$Rhat_refine
+  Rstar_refine <- args$Rstar_refine
   record <- args$record
 
   forall <- args$parallel$iterator
@@ -201,7 +224,11 @@ cknockoff <- function(X, y,
 
   # compute the observed calibration statistics
   for(j in candidates){
-    fit_on_rest <- glmnet::glmnet(X[, -j], y, lambda = 2 * y.pack$sigmahat_XXk_res/n, intercept=T, standardize=F, standardize.response=F, family="gaussian")
+    sigma_est <- sqrt(y.pack$y_Pi_Xnoj_res_norm2[j] / (n-p+1)) # overestimate sigma
+    fit_on_rest <- glmnet::glmnet(X[, -j], y,
+                                  lambda = 2 * sigma_est / n,
+                                  intercept=T, standardize=F, standardize.response=F,
+                                  family="gaussian")
     y.pack$Xy_bias[j] <- t(X[, j]) %*% (X[, -j] %*% fit_on_rest$beta + rep(fit_on_rest$a0, each = n))
   }
   cali_stats_obs <- abs(c(matrix(y, nrow = 1) %*% X) - y.pack$Xy_bias)
@@ -231,8 +258,8 @@ cknockoff <- function(X, y,
     # couple the samples?
     sample_coupling <- couple_samples(n, p, cali_rej_set, kn_rej_set)
 
-    # storage for recording the calculated statistics for post-hoc Rhat refinement
-    calc_Rhat_online <- F
+    # storage for recording the calculated statistics for post-hoc Rstar refinement
+    calc_Rstar_online <- F
     record_mc <- list(kn_stat = matrix(NA, nrow = p, ncol = mc_size),
                       DPj = rep(NA, mc_size), bj = rep(NA, mc_size))
 
@@ -282,21 +309,21 @@ cknockoff <- function(X, y,
         # compute calibration stat
         cali_stat_mc <- abs(sum(X[, j] * y_cond[, mc_i]) - y.pack$Xy_bias[j])
 
-        # do Rhat refinement in realtime?
-        if(calc_Rhat_online){
-          Rhat.pack <- list(X.pack = X.pack, y_mc = y_cond[, mc_i],
+        # do Rstar refinement in realtime?
+        if(calc_Rstar_online){
+          Rstar.pack <- list(X.pack = X.pack, y_mc = y_cond[, mc_i],
                             statistic = statistic,
                             sigmahat_XXk_res = sigmahat_XXk_res[mc_i],
-                            Rhat_max_try = Rhat_max_try,
-                            Rhat_calc_max_step = Rhat_calc_max_step)
+                            Rstar_max_try = Rstar_max_try,
+                            Rstar_calc_max_step = Rstar_calc_max_step)
         } else{
-          Rhat.pack <- NA
+          Rstar.pack <- NA
         }
         # compute fj from the current MC sample
         fj_result <- calc_fj(j,
                              alpha, kn_stat_mc,
                              cali_stats_obs[j], cali_stat_mc,
-                             Rhat.pack)
+                             Rstar.pack)
 
         # record the raw result
         mc_used <- mc_used + 1
@@ -317,8 +344,8 @@ cknockoff <- function(X, y,
           }
         }
 
-        # record the more detailed statistics for post-hoc Rhat refinement
-        if(Rhat_refine && mc_round == 1){
+        # record the more detailed statistics for post-hoc Rstar refinement
+        if(Rstar_refine && mc_round == 1){
           record_mc$DPj[mc_i] <- fj_result$DP_j
           record_mc$bj[mc_i] <- fj_result$b_j
           if(abs(fj_result$DP_j - 1) < 1e-10){
@@ -336,23 +363,23 @@ cknockoff <- function(X, y,
 
       }
 
-      # post-hoc Rhat refinement, for those not rejected only
-      if(Rhat_refine && !decision$reject && mc_round == 1){
-        Rhat.pack <- list(X.pack = X.pack,
+      # post-hoc Rstar refinement, for those not rejected only
+      if(Rstar_refine && !decision$reject && mc_round == 1){
+        Rstar.pack <- list(X.pack = X.pack,
                           statistic = statistic,
-                          Rhat_max_try = Rhat_max_try,
-                          Rhat_calc_max_step = Rhat_calc_max_step)
+                          Rstar_max_try = Rstar_max_try,
+                          Rstar_calc_max_step = Rstar_calc_max_step)
 
-        refined_result <- post_refine_Rhat(sample_res, record_mc,
+        refined_result <- post_refine_Rstar(sample_res, record_mc,
                                            mc_used, n_Ej_samples,
                                            Ej_mc, Ej_samples,
                                            Ej_bounds, sample_coupling,
                                            decision, j,
-                                           Rhat.pack,
+                                           Rstar.pack,
                                            alpha, rej_alpha)
 
         decision <- refined_result$decision
-        calc_Rhat_online <- refined_result$calc_Rhat_online
+        calc_Rstar_online <- refined_result$calc_Rstar_online
         Ej_mc <- refined_result$Ej_mc
         Ej_samples <- refined_result$Ej_samples
       }
@@ -411,7 +438,7 @@ cknockoff <- function(X, y,
                  kn.selected = kn_selected,
                  checked_so_far = checked_so_far,
                  next_check_num = min(p - length(checked_so_far), max(5, length(candidates))),
-                 Rhat_refine = Rhat_refine,
+                 Rstar_refine = Rstar_refine,
                  X.pack = X.pack)
 
   # prepare the result
@@ -435,42 +462,42 @@ cknockoff <- function(X, y,
 
 # Replace some R^kn by R^* to do cKnockoff* after computing the f_j for cKnockoff,
 # see Appendix of the cKnockoff paper for details
-post_refine_Rhat <- function(sample_res, record_mc,
+post_refine_Rstar <- function(sample_res, record_mc,
                              mc_used, n_Ej_samples,
                              Ej_mc, Ej_samples,
                              Ej_bounds, sample_coupling,
                              decision, j,
-                             Rhat.pack,
+                             Rstar.pack,
                              alpha, rej_alpha){
 
   # make code shorter
   record_mc$DPj <- record_mc$DPj[1:mc_used]
   record_mc$bj <- record_mc$bj[1:mc_used]
   sample_weights <- sample_res$sample_weights[1:mc_used]
-  # locate the samples with DP_j = 1, where Rhat refinement is needed
-  Rhat_index <- which(abs(record_mc$DPj - 1) < 1e-10)
+  # locate the samples with DP_j = 1, where Rstar refinement is needed
+  Rstar_index <- which(abs(record_mc$DPj - 1) < 1e-10)
 
-  if(length(Rhat_index) > 0 && length(Rhat_index) < mc_used){
-    # how large should Rhat be to make j rejected by cKnockoff
-    Rhat_to_rej_j <- calc_Rhat_to_rej_j(sample_weights, record_mc, Rhat_index)
+  if(length(Rstar_index) > 0 && length(Rstar_index) < mc_used){
+    # how large should Rstar be to make j rejected by cKnockoff
+    Rstar_to_rej_j <- calc_Rstar_to_rej_j(sample_weights, record_mc, Rstar_index)
 
-    if(Rhat_to_rej_j <= Rhat.pack$Rhat_max_try){ # if it is within the budget
-      Rhat_vec <- NULL # record the realized refined Rhat
+    if(Rstar_to_rej_j <= Rstar.pack$Rstar_max_try){ # if it is within the budget
+      Rstar_vec <- NULL # record the realized refined Rstar
 
-      for(mc_i in Rhat_index){
-        # compute Rhat
-        Rhat <- cknockoff_Rhat(Rhat.pack$X.pack,
+      for(mc_i in Rstar_index){
+        # compute Rstar
+        Rstar <- cknockoff_Rstar(Rstar.pack$X.pack,
                                sample_res$y_samples[, mc_i],
                                j_exclude = j,
                                kn_stats_obs = record_mc$kn_stat[, mc_i],
                                sigmahat_XXk_res = sample_res$sigmahat_XXk_res[mc_i],
-                               statistic = Rhat.pack$statistic,
+                               statistic = Rstar.pack$statistic,
                                alpha = alpha,
-                               Rhat_max_try = Rhat.pack$Rhat_max_try,
-                               Rhat_calc_max_step = Rhat.pack$Rhat_calc_max_step)$Rhat
+                               Rstar_max_try = Rstar.pack$Rstar_max_try,
+                               Rstar_calc_max_step = Rstar.pack$Rstar_calc_max_step)$Rstar
 
         # update the record for Ej
-        Ej_mc[mc_i] <- (1/Rhat - record_mc$bj[mc_i]) * sample_weights[mc_i]
+        Ej_mc[mc_i] <- (1/Rstar - record_mc$bj[mc_i]) * sample_weights[mc_i]
         # update the record for Ej_samples
         if(!sample_coupling){
           i_Ej_samples <- mc_i
@@ -485,17 +512,17 @@ post_refine_Rhat <- function(sample_res, record_mc,
                                   rej_alpha = rej_alpha, accept_alpha = 0.05)
         if(decision$confident){ break }
 
-        # stop refining Rhat if we cannot make Rhat as large as Rhat_to_rej_j
-        Rhat_vec <- c(Rhat_vec, Rhat)
-        if(length(Rhat_vec) >= 10){
-          if(mean(1/Rhat_vec) >= 1.5/Rhat_to_rej_j && !decision$reject){
+        # stop refining Rstar if we cannot make Rstar as large as Rstar_to_rej_j
+        Rstar_vec <- c(Rstar_vec, Rstar)
+        if(length(Rstar_vec) >= 10){
+          if(mean(1/Rstar_vec) >= 1.5/Rstar_to_rej_j && !decision$reject){
             break
           }
         }
 
       }
 
-      # after Rhat refinement is done, make decision based on all samples
+      # after Rstar refinement is done, make decision based on all samples
       if(!decision$confident){
         decision <- make_decision(Ej_samples[1:n_Ej_samples], Ej_bounds, threshold = 0,
                                   rej_alpha = rej_alpha, accept_alpha = 0.05)
@@ -503,35 +530,35 @@ post_refine_Rhat <- function(sample_res, record_mc,
     }
   }
 
-  # do Rhat refinement online in the feture calculation,
+  # do Rstar refinement online in the feture calculation,
   # make effect only when !decision$confident and decision$reject
-  calc_Rhat_online <- T
+  calc_Rstar_online <- T
 
-  return(list(decision = decision, calc_Rhat_online = calc_Rhat_online,
+  return(list(decision = decision, calc_Rstar_online = calc_Rstar_online,
               Ej_mc = Ej_mc, Ej_samples = Ej_samples))
 }
 
 # estimate the smallest number of R^* to make j rejected
-calc_Rhat_to_rej_j <- function(sample_weights, record_mc, Rhat_index){
-  # the values in fj that Rhat refinement cannot change
-  other_value <- sum(record_mc$DPj[-Rhat_index] * sample_weights[-Rhat_index]) - sum(record_mc$bj * sample_weights)
-  if(other_value >= 0){ # if fj > 0 even when Rhat = Inf
-    Rhat_to_rej <- Inf
-  } else{  # compute the Rhat needed to turn fj < 0
-    Rhat_to_rej <- 1/(-other_value / sum(sample_weights[Rhat_index]))
+calc_Rstar_to_rej_j <- function(sample_weights, record_mc, Rstar_index){
+  # the values in fj that Rstar refinement cannot change
+  other_value <- sum(record_mc$DPj[-Rstar_index] * sample_weights[-Rstar_index]) - sum(record_mc$bj * sample_weights)
+  if(other_value >= 0){ # if fj > 0 even when Rstar = Inf
+    Rstar_to_rej <- Inf
+  } else{  # compute the Rstar needed to turn fj < 0
+    Rstar_to_rej <- 1/(-other_value / sum(sample_weights[Rstar_index]))
   }
 
-  return(Rhat_to_rej)
+  return(Rstar_to_rej)
 }
 
 # compute R^* efficiently
-cknockoff_Rhat <- function(X.pack, y, j_exclude,
+cknockoff_Rstar <- function(X.pack, y, j_exclude,
                            kn_stats_obs,
                            sigmahat_XXk_res,
                            statistic,
                            alpha,
-                           Rhat_max_try,
-                           Rhat_calc_max_step){
+                           Rstar_max_try,
+                           Rstar_calc_max_step){
   n <- length(y)
   p <- length(kn_stats_obs)
   df <- n - p
@@ -545,7 +572,7 @@ cknockoff_Rhat <- function(X.pack, y, j_exclude,
   # only keep the hypos with very small p-values
   candidates <- intersect(candidates, which(pvals_obs <= min(alpha / p,
                                                              0.01 * (alpha / (ceiling(1/alpha - 1))) )))
-  # exclude j as j must be in the Rhat
+  # exclude j as j must be in the Rstar
   candidates <- setdiff(candidates, j_exclude)
   # order the candidates by how promising they are
   rank_p <- rank(pvals_obs[candidates])
@@ -553,16 +580,20 @@ cknockoff_Rhat <- function(X.pack, y, j_exclude,
   ranks <- rank(rank_p + rank_kn, ties.method = "first")
   candidates[ranks] <- candidates
 
-  # only keep the Rhat_max_try most promising hypos
-  n_candidates <- min(length(candidates), Rhat_max_try)
+  # only keep the Rstar_max_try most promising hypos
+  n_candidates <- min(length(candidates), Rstar_max_try)
   if(n_candidates > 0)  candidates <- candidates[1:n_candidates]
-  else return(list(selected = NULL, Rhat = 1))
+  else return(list(selected = NULL, Rstar = 1))
 
   # prepare data
   y.pack <- process_y(X.pack, y)
 
   for(j in candidates){
-    fit_on_rest <- glmnet::glmnet(X.pack$X[, -j], y, lambda = 2 * y.pack$sigmahat_XXk_res/n, intercept=T, standardize=F, standardize.response=F, family="gaussian")
+    sigma_est <- sqrt(y.pack$y_Pi_Xnoj_res_norm2[j] / (n-p+1)) # overestimate sigma
+    fit_on_rest <- glmnet::glmnet(X.pack$X[, -j], y,
+                                  lambda = 2 * sigma_est / n,
+                                  intercept=T, standardize=F, standardize.response=F,
+                                  family="gaussian")
     y.pack$Xy_bias[j] <- t(X.pack$X[, j]) %*% (X.pack$X[, -j] %*% fit_on_rest$beta + rep(fit_on_rest$a0, each = n))
   }
   cali_stats_obs <- abs(c(matrix(y, nrow = 1) %*% X.pack$X) - y.pack$Xy_bias)
@@ -603,14 +634,14 @@ cknockoff_Rhat <- function(X.pack, y, j_exclude,
     b_j_accumulate <- 0
 
     # move grid point forward
-    pval_left_nodes <- pval_left_start + direction * (1:Rhat_calc_max_step) * step_size
+    pval_left_nodes <- pval_left_start + direction * (1:Rstar_calc_max_step) * step_size
     # convert the p-value point to a y sample
     tval_nodes <- qt(pval_left_nodes, df = df, lower.tail = TRUE)
     vjy_nodes <- tj_to_vjy(tval_nodes, y.pack$y_Pi_Xnoj_res_norm2, df)
     y_results <- vjy_to_y(vjy_nodes, j, y.pack, X.pack)
 
     # at each grid point, compute fj
-    for(mc_i in 1:Rhat_calc_max_step){
+    for(mc_i in 1:Rstar_calc_max_step){
       if("sigma_tilde" %in% names(formals(statistic))){
         kn_stat_mc <- statistic(X.pack$X, X.pack$X_kn, y_results$y_samples[, mc_i],
                                 sigma_tilde = y_results$sigmahat_XXk_res[mc_i])
@@ -620,11 +651,11 @@ cknockoff_Rhat <- function(X.pack, y, j_exclude,
 
       cali_stat_mc <- abs(sum(X.pack$X[, j] * y_results$y_samples[, mc_i]) - y.pack$Xy_bias[j])
 
-      # compute fj without further Rhat refinement
+      # compute fj without further Rstar refinement
       fj_result <- calc_fj(j,
                            alpha, kn_stat_mc,
                            cali_stats_obs[j], cali_stat_mc,
-                           Rhat.pack = NA)
+                           Rstar.pack = NA)
 
       # update DP_j and b_j
       DP_j_accumulate <- DP_j_accumulate + fj_result$DP_j * step_size
@@ -641,14 +672,14 @@ cknockoff_Rhat <- function(X.pack, y, j_exclude,
   # remove the NAs in the selection set
   selected <- selected[!is.na(selected)]
 
-  return(list(selected = selected, Rhat = length(union(selected, j_exclude))))
+  return(list(selected = selected, Rstar = length(union(selected, j_exclude))))
 }
 
 # compute f_j
 calc_fj <- function(j,
                     alpha, kn_stat_mc,
                     cali_stat_obs, cali_stat_mc,
-                    Rhat.pack){
+                    Rstar.pack){
 
   ## compute b_j term
   # make rejection and fdp estimation based on knockoff statistics
@@ -671,23 +702,23 @@ calc_fj <- function(j,
 
   # R hat
   selected_mc <- kn_selected_mc
-  # Rhat refinement?
-  if(!is.na(Rhat.pack) && length(union(selected_mc, j)) == 1 &&
+  # Rstar refinement?
+  if(!is.na(Rstar.pack) && length(union(selected_mc, j)) == 1 &&
      (j %in% union(kn_selected_mc, cali_selected_mc))){
-    Rhat_recursive <- cknockoff_Rhat(X.pack = Rhat.pack$X.pack,
-                                     y = Rhat.pack$y_mc,
+    Rstar_recursive <- cknockoff_Rstar(X.pack = Rstar.pack$X.pack,
+                                     y = Rstar.pack$y_mc,
                                      j_exclude = j,
                                      kn_stats_obs = kn_stat_mc,
-                                     sigmahat_XXk_res = Rhat.pack$sigmahat_XXk_res,
-                                     statistic = Rhat.pack$statistic,
+                                     sigmahat_XXk_res = Rstar.pack$sigmahat_XXk_res,
+                                     statistic = Rstar.pack$statistic,
                                      alpha = alpha,
-                                     Rhat_max_try = Rhat.pack$Rhat_max_try,
-                                     Rhat_calc_max_step = Rhat.pack$Rhat_calc_max_step)$selected
+                                     Rstar_max_try = Rstar.pack$Rstar_max_try,
+                                     Rstar_calc_max_step = Rstar.pack$Rstar_calc_max_step)$selected
 
-    selected_mc <- union(selected_mc, Rhat_recursive)
-    Rhat <- length(union(selected_mc, j))
+    selected_mc <- union(selected_mc, Rstar_recursive)
+    Rstar <- length(union(selected_mc, j))
   } else{
-    Rhat <- NULL
+    Rstar <- NULL
   }
 
   # compute DP_j
@@ -696,7 +727,7 @@ calc_fj <- function(j,
   # compute fj
   fj <- DP_j - b_j
 
-  return(list(fj = fj, DP_j = DP_j, b_j = b_j, Rhat = Rhat))
+  return(list(fj = fj, DP_j = DP_j, b_j = b_j, Rstar = Rstar))
 }
 
 

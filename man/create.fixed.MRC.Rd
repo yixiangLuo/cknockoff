@@ -2,7 +2,7 @@
 % Please edit documentation in R/knockoff.R
 \name{create.fixed.MRC}
 \alias{create.fixed.MRC}
-\title{Title}
+\title{Creates fixed-X knockoff variables by MRC}
 \usage{
 create.fixed.MRC(
   X,
@@ -13,11 +13,40 @@ create.fixed.MRC(
 )
 }
 \arguments{
-\item{num_processes}{}
+\item{X}{n-by-p matrix of the features.}
+
+\item{method}{Same argument as the "method" in the \code{smatrix.compute_smatrix}
+function in knockpy package.
+Take value from "mvr", "maxent", "mmi", "sdp", "equicorrelated", and "ci".
+The default is "mvr".}
+
+\item{solver}{Same argument as the "solver" in the \code{smatrix.compute_smatrix}
+function in knockpy package.
+Take value from "cd", "sdp", "psgd".
+Can be leave as \code{NULL}.}
+
+\item{knockpy}{The R object wrapping the Python module "knockpy". Users may
+provide their own wrapper using "reticulate::import" if "knockpy" is not
+installed in the default python environment
+(e.g. in some environments created by anaconda).}
+
+\item{num_processes}{Same argument as the "num_processes" in the
+\code{smatrix.compute_smatrix} function in knockpy package.
+Number of parallel process to use in computing the matrix approximately.}
 }
 \value{
-a list of (X, X_kn)
+A list containing the following components:
+\item{X}{n-by-p matrix of original variables (normalized).}
+\item{Xk}{n-by-p matrix of knockoff variables.}
 }
 \description{
-Title
+This function is a R wrapper of the \code{knocproduce_FX_knockoffskpy}
+function in the Python package \code{knockpy}. It creates fixed-X knockoff
+variables by Minimizing Reconstructability
+(see \href{Spector and Janson (2021)}{https://arxiv.org/abs/2011.14625}).
+To use this function, Users should have the R package \code{reticulate} and
+the python package \code{knockpy} installed.
+}
+\references{
+
 }

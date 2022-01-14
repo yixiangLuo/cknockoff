@@ -10,95 +10,111 @@ cknockoff(
   knockoffs = knockoff::create.fixed,
   statistic = stat.glmnet_coefdiff_lm,
   alpha = 0.05,
-  Rhat_refine = F,
+  Rstar_refine = F,
   n_cores = 1,
   prelim_result = NULL,
   X.pack = NULL
 )
 }
 \arguments{
-\item{X}{n-by-p matrix or data frame of predictors.}
+\item{X}{n-by-p matrix or data frame of features.}
 
 \item{y}{response vector of length n.}
 
-\item{knockoffs}{knockoffs method used to construct the knockoff matrix for X.
+\item{knockoffs}{method used to construct the knockoff matrix for X.
 It should be a function taking a n-by-p matrix as input and returning a n-by-p
 matrix of knockoff variables.
-It is the same as the \code{knockoffs} parameter in \href{knockoff}{https://cran.r-project.org/web/packages/knockoff/}\code{::knockoff.filter}.
+It is the same as the \code{knockoffs} argument in
+\code{knockoff::knockoff.filter}.
 By default, \code{knockoff::create.fixed} is used.}
 
 \item{statistic}{the knockoff feature statistics (W-statistics) function used
 to assess variable importance.
-Any statistic function in \href{knockoff}{https://cran.r-project.org/web/packages/knockoff/}
-can be passed via this parameter.
-But please be aware of efficiency issue as this function will be called
-repeatedly in cknockoff. We suggest use the statistic functions supplied by
+Any function in the family "statistics" in the R package \code{knockoff} that
+are suitable for the fixed-X setting can be supplied to this argument.
+But please be aware of the efficiency issue as this function will be called
+repeatedly in cknockoff. We suggest use the statistic functions provided by
 our package.
 By default, a lasso statistic from our package is used.}
 
-\item{alpha}{target false discovery rate (default: 0.05).}
+\item{alpha}{nominal false discovery rate (default: 0.05).}
 
-\item{Rhat_refine}{A logical value determine if we use a betrer estimation of
-the number of rejections in calibration. If \code{TRUE}, the procedure is
-cKnockoff* and otherwise the plain cKnockoff. The default is \code{TRUE}.}
+\item{Rstar_refine}{A logical value determining if we use a better estimation
+of the number of rejections in calibration.
+If \code{TRUE}, the procedure is cKnockoff* and otherwise is the vanilla
+cKnockoff.
+The default is \code{FALSE}.}
 
-\item{n_cores}{the number of cores used in computing cKnockoff in parallel.
+\item{n_cores}{the number of cores to be used in computing cKnockoff in parallel.
 package \code{doParallel} is required if \code{n_cores} > 1.
 Otherwise it's computed sequentially.}
 
 \item{prelim_result}{either a \code{knockoff.result} object returned by
 \code{knockoff::knockoff.filter} or a \code{cknockoff.result} object returned
 by \code{cknockoff}.
-cknockoff can read the information from the knockoff result or previous
-cknockoff result and make possibly more rejections under the same FDR control.
-When supplied, all other parameters are not needed and will be overwritten.
+cknockoff can read the information from a knockoff result or a cknockoff
+result and make possibly more rejections with the same FDR control.
+See more details below.}
 
-It's possible that cknockoff cannot fetch the function
-\code{statistic} or value \code{alpha} by their names from a
-\code{knockoff.result} object. If that is the case, please supply them to
-cknockoff via arguments.}
-
-\item{X.pack}{An object of class "cknockoff.X.pack" returned by function
+\item{X.pack}{An object of class \code{cknockoff.X.pack} returned by function
 \code{process_X}.
 This is used only for simulations studies, where cknockoff is applied many
-times to the same fixed X, to accelerate computation. General users should
-ignore it and leave it as default = NULL.}
+times to the same fixed X, to accelerate computation.
+General users should ignore it and leave it as default = NULL.
+If X.pack is provided, the argument "knockoffs" is not needed and will be
+overwritten.}
 }
 \value{
-An object of class "cknockoff.result". This object is a list similar
-to the "knockoff.result" object, containing essentially the same information:
+An object of class \code{cknockoff.result}. It is a list similar
+to the \code{knockoff.result} object, containing essentially the same
+information:
 \item{X}{matrix of original variables (scaled and possibly augmented)}
-\item{Xk}{matrix of knockoff variables (cooresponding the the returned X)}
+\item{Xk}{matrix of knockoff variables (cooresponding to the returned X)}
 \item{y}{response vector (possibly augmented)}
-\item{kn.statistic}{the knockoff W statistics}
+\item{kn.statistic}{the knockoff feature statistics}
 \item{selected}{named vector of selected variables}
 \item{sign_predict}{the predicted signs of beta}
-\item{record}{a list recording information used to assist computing from
-"prelim_result". Users may ignore it.}
+\item{record}{a list recording some information during the calculation. It
+aims to make computing based on "prelim_result" possible and easy.
+Users may ignore it.}
 }
 \description{
-This function apply the cKnockoff procedure to the data under linear model,
-selecting important features with FDR control. It has power dominating fixed-X
-knockoff via conditional calibration.
+This function applies the cKnockoff procedure to the data \eqn{(X, y)}
+subjecting to the Gaussian linear model, selecting variables/features
+relevant for predicting the outcome with FDR control.
 }
 \details{
-If parameter "prelim_result" is supplied, all the other parameters except
-"n_cores" will be overwritten by the information extracted from it.
+If argument \code{prelim_result} is supplied with a object, all the other
+parameters except \code{n_cores} and \code{Rstar_refine} will be overwritten
+by the information retrieved from it.
 
-If a \code{knockoff.result} object is supplied, cknockoff will return possibly
-more selections on the same problem with the same FDR control.
-To use, the function call of \code{knockoff::knockoff.filter} that generates
-such \code{knockoff.result} object should specify parameters \code{statistic}
-and \code{fdr} explicitly (rather than relying on the default).
+If a \code{knockoff.result} object is supplied to \code{prelim_result},
+cknockoff will return possibly more selections on the same problem with the
+same FDR control.
+To use, the function call of \code{knockoff::knockoff.filter} that returned
+such \code{knockoff.result} object must have arguments "statistic"
+and "fdr" explicitly provided (rather than relying on their defaults).
+See examples below.
+
+It's possible that cknockoff cannot fetch the function
+"statistic" or value for "alpha" by their names from a
+\code{knockoff.result} object.
+If this is the case, please supply them to cknockoff explicitly via arguments.
 
 It's possible to even make more rejections based on a \code{cknockoff.result}
 object. This is because cknockoff will only explore those promising features
 and discards the others, say those with large p-values.
 Calling cknockoff() on a \code{cknockoff.result} object would further
 explore some most promising ones among the discarded features and (rarely)
-possibly make several more rejections. You can do this recursively and FDR is
-proved to be controlled whenever you decide to stop.
+possibly make several more rejections.
+Users can do this recursively and FDR is proved to be controlled whenever
+they decide to stop.
 The computational time of each call should be similar.
+
+If the \code{cknockoff.result} object is obtained by setting
+\code{Rstar_refine = FALSE}, more rejections may be made with the same FDR
+control by supplying \code{cknockoff.result} to \code{prelim_result} and set
+\code{Rstar_refine = TRUE}. See examples below.
 }
 \examples{
 p <- 100; n <- 300; k <- 15
@@ -112,22 +128,29 @@ print(which(1:p \%in\% nonzero))
 result <- cknockoff(X, y, alpha = 0.05, n_cores = 1)
 print(result$selected)
 
-# improve knockoff and previous cknockoff result
+# knockoff rejection
 library("knockoff")
 kn.result <- knockoff.filter(X, y,
                              knockoffs = create.fixed,
                              statistic = stat.glmnet_coefdiff_lm,
-                             fdr = 0.05)
+                             # must specify this argument explicitly
+                             fdr = 0.05
+                             # must specify this argument explicitly
+                             )
 print(kn.result$selected)
 
+# improve knockoff result
 result <- cknockoff(prelim_result = kn.result, n_cores = 2)
 print(result$selected)
 
+# improve previous cknockoff result
 result <- cknockoff(prelim_result = result)
 print(result$selected)
 
-result <- cknockoff(prelim_result = result, n_cores = 2, Rhat_refine = T)
+# improve previous cknockoff result with cknockoff*
+result <- cknockoff(prelim_result = result, n_cores = 2, Rstar_refine = TRUE)
 print(result$selected)
+
 }
 \references{
 

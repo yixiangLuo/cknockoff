@@ -2,9 +2,9 @@
 % Please edit documentation in R/knockoff_stats.R
 \name{stat.glmnet_lambdasmax_lm}
 \alias{stat.glmnet_lambdasmax_lm}
-\title{Importance statistics based on Lasso penalty and Lagrange Multipliers}
+\title{Efficient Lasso Signed-Max feature statistics}
 \usage{
-stat.glmnet_lambdasmax_lm(X, X_k, y, sigma_tilde = NULL)
+stat.glmnet_lambdasmax_lm(X, X_k, y, sigma_tilde = NULL, nlambda = 10)
 }
 \arguments{
 \item{X}{n-by-p matrix of original variables.}
@@ -13,18 +13,56 @@ stat.glmnet_lambdasmax_lm(X, X_k, y, sigma_tilde = NULL)
 
 \item{y}{y vector of length n, containing the response variables.}
 
-\item{sigma_tilde}{An estimator of the noise level independent of
-\eqn{[X, X_k]^T y}.
-By default, it is set to be NULL and will be computed inside the function
-based on X, X_k, and y.}
+\item{sigma_tilde}{An estimator of the noise level that is independent of
+\eqn{[X, \widetilde{X}]^T y}.
+If not provided, it will be computed inside the function
+based on X, X_k, and y, in which case we must have \eqn{n > 2p}.}
+
+\item{nlambda}{the number of grid points in computing the Lasso path.
+A larger value will make the calculation more precise but more expensive.
+The default value is 10.}
 }
 \value{
-A vector of statistics \eqn{W} of length p.
+A vector of knockoff feature statistics \eqn{W} of length p.
 }
 \description{
-Importance statistics based on Lasso penalty and Lagrange Multipliers
+This function provides a computationally efficient feature statistic that
+behave similarly to the Lasso Signed-Max feature statistics produced by
+the \code{knockoff::stat.glmnet_lambdasmax()} function.
+We compute a \eqn{\hat{\lambda}_j} as an approximation of the maximal
+regularization parameter \eqn{\lambda} at which the jth variable enters the
+Lasso model.
+And obtain the feature statistics
+\deqn{
+W_j = (\hat{\lambda}_{j} \vee \hat{\lambda}_{j+m}) \cdot
+sgn (\hat{\lambda}_{j} - \hat{\lambda}_{j+m})
+}
 }
 \details{
+If sigma_tilde is not provided and \eqn{n = 2p}, sigma_tilde will be computed
+from the residue of the OLS fitting \eqn{y ~ X}.
+The resulting estimator is thus not independent of \eqn{[X, \widetilde{X}]^T y}.
+Users should avoid this case if they want a guaranteed FDR control.
+Though in practice it shouldn't really make a difference.
+
+Details of the calculation of this feature statistics can be found in (our paper).
+
+The implementation of this function is modified from the
+\code{knockoff::stat.glmnet_lambdasmax()} function.
+}
+\examples{
+p <- 100; n <- 300; k <- 15
+X <- matrix(rnorm(n*p), n)
+nonzero <- sample(p, k)
+beta <- 2.5 * (1:p \%in\% nonzero)
+y <- X \%*\% beta + rnorm(n)
+print(which(1:p \%in\% nonzero))
+
+result <- cknockoff(X, y,
+                    knockoffs = knockoff::create.fixed,
+                    statistic = stat.glmnet_lambdasmax_lm,
+                    alpha = 0.05, n_cores = 1)
+print(result$selected)
 
 }
 \seealso{

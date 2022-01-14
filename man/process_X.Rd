@@ -24,3 +24,21 @@ parameter in cknockoff() if needed.
 \description{
 Compute and store matrices needed by cknockoff() from on X
 }
+\examples{
+p <- 100; n <- 300; k <- 15
+X <- matrix(rnorm(n*p), n)
+nonzero <- sample(p, k)
+beta <- 2.5 * (1:p \%in\% nonzero)
+y <- X \%*\% beta + rnorm(n)
+print(which(1:p \%in\% nonzero))
+
+X.pack <- process_X(X, knockoffs = knockoff::create.fixed)
+
+result <- cknockoff(X, y,
+                    alpha = 0.05,
+                    n_cores = 1,
+                    X.pack = X.pack)
+print(result$selected)
+
+
+}

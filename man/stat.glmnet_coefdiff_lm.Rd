@@ -2,7 +2,7 @@
 % Please edit documentation in R/knockoff_stats.R
 \name{stat.glmnet_coefdiff_lm}
 \alias{stat.glmnet_coefdiff_lm}
-\title{Importance statistics based on Lasso coefficients and Lagrange Multipliers}
+\title{Lasso Coefficient-Difference feature statistics with tiebreaker}
 \usage{
 stat.glmnet_coefdiff_lm(X, X_k, y, sigma_tilde = NULL)
 }
@@ -13,18 +13,58 @@ stat.glmnet_coefdiff_lm(X, X_k, y, sigma_tilde = NULL)
 
 \item{y}{y vector of length n, containing the response variables.}
 
-\item{sigma_tilde}{An estimator of the noise level independent of
-\eqn{[X, X_k]^T y}.
-By default, it is set to be NULL and will be computed inside the function
-based on X, X_k, and y.}
+\item{sigma_tilde}{An estimator of the noise level that is independent of
+\eqn{[X, \widetilde{X}]^T y}.
+If not provided, it will be computed inside the function
+based on X, X_k, and y, in which case we must have \eqn{n > 2p}.}
 }
 \value{
-A vector of statistics \eqn{W} of length p.
+A vector of knockoff feature statistics \eqn{W} of length p.
 }
 \description{
-Importance statistics based on Lasso coefficients and Lagrange Multipliers
+Fit Lasso on the augmented model \eqn{y ~ [X, \widetilde{X}]} with
+regularization parameter \eqn{\lambda}.
+Then, compute the difference statistic
+\deqn{W^0_j = |Z_j| - |\tilde{Z}_j|}
+where \eqn{Z_j} and \eqn{\tilde{Z}_j} are the coefficient estimates for the
+jth variable and its knockoff, respectively.
+For those variables that both themselves and their knockoffs are not selected
+by Lasso, we break the tie by their correlation with the residue, by defining
+\deqn{\rho_j = |X_j^T residue| - |\tilde{X}_j^T residue|}
+for them and \eqn{\rho_j = 2 \lambda} for the others.
+The final feature statistics are
+\deqn{
+  W_j = W^0_j + \rho_j.
+}
+\eqn{\lambda} is set to be \eqn{2 \tilde{\sigma}}, where \eqn{\tilde{\sigma}}
+is an estimator of the noise level that is independent of
+\eqn{[X, \widetilde{X}]^T y}.
 }
 \details{
+If sigma_tilde is not provided and \eqn{n = 2p}, sigma_tilde will be computed
+from the residue of the OLS fitting \eqn{y ~ X}.
+The resulting estimator is thus not independent of \eqn{[X, \widetilde{X}]^T y}.
+Users should avoid this case if they want a guaranteed FDR control.
+Though in practice it shouldn't really make a difference.
+
+Details of the calculation of this feature statistics can be found in (our paper).
+
+The implementation of this function is modified from the
+\code{knockoff::stat.glmnet_coefdiff()} function.
+}
+\examples{
+p <- 100; n <- 300; k <- 15
+X <- matrix(rnorm(n*p), n)
+nonzero <- sample(p, k)
+beta <- 2.5 * (1:p \%in\% nonzero)
+y <- X \%*\% beta + rnorm(n)
+print(which(1:p \%in\% nonzero))
+
+result <- cknockoff(X, y,
+                    knockoffs = knockoff::create.fixed,
+                    statistic = stat.glmnet_coefdiff_lm,
+                    alpha = 0.05, n_cores = 1)
+print(result$selected)
 
 }
 \seealso{

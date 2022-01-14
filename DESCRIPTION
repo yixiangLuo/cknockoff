@@ -1,13 +1,15 @@
 Package: cknockoff
-Title: What the Package Does (One Line, Title Case)
+Title: The cKnockoff Filter for FDR-controlled Variable Selection
 Version: 0.0.0.9000
+Date: 2022-01-13
 Authors@R: 
-    person(given = "First",
-           family = "Last",
-           role = c("aut", "cre"),
-           email = "first.last@example.com",
-           comment = c(ORCID = "YOUR-ORCID-ID"))
-Description: What the package does (one paragraph).
+    c(person("Yixiang", "Luo", role = c("aut", "cre"),
+             email="yixiangluo@berkeley.edu"),
+      person("William", "Fithian", role = c("ctb")),
+      person("Lihua", "Lei", role = c("ctb")))
+Description: The cKnockoff method is a multiple testing procedure applied to 
+    the linear model for variable selection with FDR control. It almost surely
+    dominates the fixed-X knockoff procedure.
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true

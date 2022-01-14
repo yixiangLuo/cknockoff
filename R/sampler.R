@@ -309,15 +309,8 @@ region_F1geqF2 <- function(x, y1, y2, method, n_eval = 100){
     n_eval <- n_eval
 
     # local linear regression with Gaussian kernel
-    tryCatch(
-      {
-        F1 <- KernSmooth::locpoly(x, y1, bandwidth = bandwidth, degree = 1, gridsize = n_eval, range.x = x_range)
-        F2 <- KernSmooth::locpoly(x, y2, bandwidth = bandwidth*2, degree = 1, gridsize = n_eval, range.x = x_range)
-      },
-      error = function(error_message){
-        browser()
-      }
-    )
+    F1 <- KernSmooth::locpoly(x, y1, bandwidth = bandwidth, degree = 1, gridsize = n_eval, range.x = x_range)
+    F2 <- KernSmooth::locpoly(x, y2, bandwidth = bandwidth*2, degree = 1, gridsize = n_eval, range.x = x_range)
 
     # find the desired region
     F1geqF2 <- F1$y >= F2$y

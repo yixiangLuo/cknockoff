@@ -2,7 +2,6 @@
 
 export(cknockoff)
 export(create.fixed.MRC)
-export(kn.select)
 export(process_X)
 export(stat.glmnet_coefdiff_lm)
 export(stat.glmnet_lambdasmax_lm)

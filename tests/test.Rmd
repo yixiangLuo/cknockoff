@@ -1,0 +1,271 @@
+```{r setup, echo = FALSE, message=FALSE, warning=FALSE}
+# set default knitr chunks
+knitr::opts_chunk$set(
+  echo = FALSE,  # don't print the code chunk
+  warning = FALSE,  # don't print warnings
+  message = FALSE,  # don't print messages
+  fig.align = "center",  # always align figure in center
+  fig.pos = "H",  # always plot figure at the exact location of the code chunk
+  cache = FALSE)  # don't cache results
+
+
+library(tidyverse)
+library(foreach)
+library(doParallel)
+library(KernSmooth)
+library(knockoff)
+library(devtools)
+
+
+load_all()
+
+```
+
+The functions in the cknockoff package is hard to be tested automatically due to
+the randomness inside. This R markdown file serves as a collection of test on
+important components of the package.
+
+
+```{r test_confidence_decision}
+
+source("confidence_sequence.R")
+
+# test if we construct the confidence sequence correctly
+# if so, the resulting "fails covering proportion" should be below alpha
+# see the definition of the function for more details
+test_confidence_sequence(alpha = 0.05, seq_length = 100, n_test = 1000)
+
+# test if our decision making function works properly
+# if so 
+# 1. the "proportion of wrong decision when we have confidence" should be below  
+# "the effective significance level"
+# 2. when "threshold" get farther from -2/3, the actual mean, or when 
+# "seq_length" get larger, the "proportion of decision with confidence" should 
+# be closer to 1
+# 3. we expect to see a correct decision most of the time
+# 
+# The test data sequence has actual mean -2/3, and we should reject if 
+# -2/3 <= threshold
+# 
+# see the definition of the function for more details
+test_decision(rej_alpha = 0.05, accept_alpha = 0.05,
+              seq_length = 200,
+              threshold = -1/2,
+              n_test = 100)
+
+```
+
+
+
+```{r test_sampler, fig.height=4, fig.width=6}
+
+# test if our sampler works correctly in computing a certain Ej by Monte-Carlo
+# This is done by
+# 1. comparing the results of our sampler with the theoretical prediction
+# 2. comparing the results of our sampler with a naive sampler, which generates
+# z conditional S_j without any importance sampling tricks.
+
+source("sampler_main.R")
+source("sampler_utils.R")
+source("sampler_plot.R")
+
+## problem settings
+p <- 100 # number of features ("m" in our paper)
+n <- p*3 # number of data points
+X_type = "MCC" # type of the design matrix, see function gene_X() in sampler_utils.R
+
+mc_size <- 200 # Monte-Carlo sample size
+target <- 0.5 # power of BH at level 0.2, this determines the signal strength
+
+alpha <- 0.2 # FDR level
+invest_j <- 21 # feature j to invest
+
+naive_sampler <- F # shoule we use the naive sampler or our actual sampler
+
+# see meaning of the arguments in the definition of the function in "sampler_main.R"
+ineq_invest <- invest_ineq(n, p, mc_size,
+                           X_type = X_type, 
+                           target, alpha,
+                           alt_num = 10, y_seed = 12,
+                           invest_j,
+                           naive_sampler = naive_sampler,
+                           sample_coupling = F,
+                           kn_reg_method = "local_lin_reg",
+                           # statistic = stat.glmnet_coefdiff_lm,
+                           statistic = stat.glmnet_lambdasmax_lm,
+                           # noise = quote(corr_noise(n, rho = 0.999))
+                           quote(rt(n, df = 3))
+                           # noise = quote(rnorm(n))
+                           )
+
+# the invest_ineq() will print several results as a test for our sampler
+# if our sampler works correctly, we should see
+# 1. when naive_sampler = T, the printed "sample_mass (empirical)" should be 
+# close to the "sample_mass (theoretical)", which represents the mass of the 
+# region where we generate samples from
+# 2. the printed "Ej" when naive_sampler = T/F should be close to each other.
+# namely, the computed Ej should be similar under different sampler.
+# 3. when naive_sampler = F, the printed "outside seq bound" should be 0.
+print("sample_mass (theoretical):")
+print(ifelse(!naive_sampler, 1, 
+             sum(pt(ineq_invest$sample_region$right, df = n-p, lower.tail = T) -
+             pt(ineq_invest$sample_region$left, df = n-p, lower.tail = T))))
+
+# draw the CDF of the right-sided p-value from the t-statistics for feature j
+# it tests the correctness of our sampler based on the projection of the samples
+# onto Xj
+# if naive_sampler = F and our sampler is working correctly, the theoretical 
+# and empirical results should be consistent
+draw_pval_cdf(ineq_invest$pval_mc, ineq_invest$weights_mc, ineq_invest$sample_region, df = n-p)
+
+# draw the CDF of the projection of the sample z onto a unit vector in the
+# residue space of X
+# it tests the correctness of our sampler based on the other typo of projection
+# if naive_sampler = F and our sampler is working correctly, the theoretical 
+# and empirical results should be consistent
+draw_yres_cdf(ineq_invest$y_Pi_Xk1_mc, ineq_invest$weights_mc, ineq_invest$z_norm2, df = n-p)
+
+## the following parts are for developing purpose, not for testing
+## Users may ignore them
+
+# plot the important quantities in the calibration inequality
+draw_ineq(ineq_invest)
+
+# plot the knockoff feature statistics
+# the blue line is the fitted |W|_{(\tau_1)}, the absolute value of the feature
+# statitics at the early-stopping knockoff boundary.
+# the green line is the fitted |W_j|
+# we should see these fits are good if we want our sampler to work well
+# the x-axis is (v_j^T y), where v_j is the projection of X[, j] onto the space 
+# perpendicular to X[, -j]. It can be viewed as a proxy of the t-statistic t_j
+draw_kn_stat(ineq_invest, invest_j, SRL = F)
+
+# print the boundary numbers in the figure drawn by draw_kn_stat()
+print("right-sided p-val at the boundary of the earli-stopping knockoff rejection set:")
+print(pt(ineq_invest$kn_rej_set$left, df = n-p, lower.tail = FALSE))
+print(pt(ineq_invest$kn_rej_set$right, df = n-p, lower.tail = FALSE))
+print("vjy at the boundary of the earli-stopping knockoff rejection set:")
+print(ineq_invest$kn_rej_set$left_vjy)
+print(ineq_invest$kn_rej_set$right_vjy)
+
+```
+
+
+```{r test_Rstar}
+
+# test if our R* calculation (function cknockoff_Rstar()) is correct
+# if so, we should see the R* rejection set is a subset of cknockoff (call it
+# consistent)
+# but it might be a few inconsistent selections due to the randomness
+
+source("sampler_utils.R")
+
+## problem settings, see explanation in the block above
+p <- 100
+n <- 3*p
+
+X_seed <- 2021
+pi1 <- 10 / p
+
+alpha <- 0.1
+target <- 0.5
+target_at_alpha <- 0.2
+
+sample_size <- 100
+n_cores <- 14
+
+X_type <- "IID_Normal"  # "IID_Normal", "MCC", "MCC_Block"
+posit_type <- "random"
+
+X <- gene_X(X_type, n, p, X_seed)
+X.pack <- process_X(X, knockoffs = create.fixed)
+X <- X.pack$X
+
+statistic <- stat.glmnet_coefdiff_lm
+# statistic <- stat.glmnet_lambdasmax_lm
+
+# generate beta
+mu1 <- BH_lm_calib(X, pi1, noise = quote(rnorm(n)),
+                   posit_type, 1, side = "two", nreps = 200,
+                   alpha = target_at_alpha, target = target, n_cores = n_cores)
+beta <- genmu(p, pi1, mu1, posit_type, 1)
+H0 <- beta == 0
+
+registerDoParallel(n_cores)
+
+# do the test
+results <- foreach(iter = 1:sample_size, .options.multicore = list(preschedule = F)) %dopar% {
+# results <- lapply(1:sample_size, function(iter){
+  # print(iter)
+  
+  set.seed(iter)
+  
+  y <- X %*% beta + rnorm(n)
+  
+  full_select <- cknockoff(X, y,
+                           statistic,
+                           alpha = alpha,
+                           n_cores = 1,
+                           X.pack = X.pack,
+                           Rstar_refine = F)$selected
+  
+  y.pack <- process_y(X.pack, y, randomize = F)
+  kn_stats_obs <- statistic(X, X.pack$X_kn, y,
+                            sigma_tilde = y.pack$sigmahat_XXk_res)
+  
+  Rstar_select <- cknockoff_Rstar(X.pack, y, j_exclude = NULL,
+                                  kn_stats_obs,
+                                  y.pack$sigmahat_XXk_res,
+                                  statistic,
+                                  alpha,
+                                  Rstar_max_try = 3,
+                                  Rstar_calc_max_step = 3)$selected
+  
+  return(list(full = full_select, Rstar = Rstar_select))
+}
+
+# process result
+inconsistent_sel_num <- lapply(results, function(res){
+  length(setdiff(res$Rstar, res$full))
+})
+
+inconsistent_sel_num <- sum(unlist(inconsistent_sel_num))
+total_Rstar_sel <- lapply(results, function(res){
+  length(res$Rstar)
+})
+total_Rstar_sel <- sum(unlist(total_Rstar_sel))
+
+# show results
+print(paste(inconsistent_sel_num, "out of", total_Rstar_sel, "selection in Rstar inconsistent with cKnockoff."))
+```
+
+
+
+
+
+```{r}
+# example of applying cknockoff and cknockoff*, as a simple test
+
+p <- 100; n <- 300; k <- 15
+X <- matrix(rnorm(n*p), n)
+nonzero <- sample(p, k)
+beta <- 1 * (1:p %in% nonzero)
+# beta <- 0.2 * (1:p %in% nonzero)
+y <- X %*% beta + rnorm(n)
+print(which(1:p %in% nonzero))
+
+# Basic usage
+result <- cknockoff(X, y, alpha = 0.05, n_cores = 1)
+print(result$selected)
+
+result <- cknockoff(X, y, alpha = 0.05, n_cores = 1, Rstar_refine = T)
+print(result$selected)
+
+```
+
+
+
+
+
+
+

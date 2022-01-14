@@ -1,6 +1,6 @@
 # parse the arguments supplied to cknockoff()
 parse_args <- function(X, y, knockoffs, statistic,
-                       alpha, Rhat_refine,
+                       alpha, Rstar_refine,
                        n_cores,
                        prelim_result, X.pack,
                        envir){
@@ -18,9 +18,9 @@ parse_args <- function(X, y, knockoffs, statistic,
                 list(kn.statistic = prelim_result$kn.statistic,
                      selected_so_far = prelim_result$selected))
 
-    # make Rhat_refine=T if previously set TRUE, else make the non-rejected unchecked
-    if(prelim_result$record$Rhat_refine == T) Rhat_refine <- T
-    else if(Rhat_refine == T) record$checked_so_far <- prelim_result$selected
+    # make Rstar_refine=T if previously set TRUE, else make the non-rejected unchecked
+    if(prelim_result$record$Rstar_refine == T) Rstar_refine <- T
+    else if(Rstar_refine == T) record$checked_so_far <- prelim_result$selected
 
     if(evalq(missing(n_cores), parent.frame())){
       n_cores <- prelim_result$record$n_cores
@@ -84,7 +84,7 @@ parse_args <- function(X, y, knockoffs, statistic,
 
   return(list(X = X, y = y, knockoffs = knockoffs, statistic = statistic,
               alpha = alpha, n_cores = n_cores, X.pack = X.pack,
-              Rhat_refine = Rhat_refine,record = record))
+              Rstar_refine = Rstar_refine,record = record))
 }
 
 # check if the arguments are valid
@@ -171,9 +171,25 @@ process_args <- function(args){
 #' many matrices like the knockoff matrix and a basis of the linear space spanned by X, etc.
 #' Users don't need to work on the object themselves but pass it to the "X.pack"
 #' parameter in cknockoff() if needed.
-#' @export
 #'
 #' @examples
+#' p <- 100; n <- 300; k <- 15
+#' X <- matrix(rnorm(n*p), n)
+#' nonzero <- sample(p, k)
+#' beta <- 2.5 * (1:p %in% nonzero)
+#' y <- X %*% beta + rnorm(n)
+#' print(which(1:p %in% nonzero))
+#'
+#' X.pack <- process_X(X, knockoffs = knockoff::create.fixed)
+#'
+#' result <- cknockoff(X, y,
+#'                     alpha = 0.05,
+#'                     n_cores = 1,
+#'                     X.pack = X.pack)
+#' print(result$selected)
+#'
+#'
+#' @export
 process_X <- function(X, knockoffs = knockoff::create.fixed){
   # validate the arguments
   if(NCOL(X) <= 1){

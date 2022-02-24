@@ -2,14 +2,14 @@
 # sampling from the p-value (calibration) rejection set union the knockoff rejection set
 y_sampler_cond_Sj <- function(sample_size, cali_rej_reg, kn_rej_reg, j,
                               y.pack, X.pack, sample_coupling){
-  df <- y.pack$df
-  y_Pi_Xnoj_res_norm2 <- y.pack$y_Pi_Xnoj_res_norm2[j]
+  df_X <- y.pack$y.data$df_X
+  RSS_Xnoj <- y.pack$RSS_Xnoj[j]
 
   # mass of calibration rejection set
   rej_set <- cali_rej_reg
   if(!is.null(rej_set$left)){
-    cali_rej_lb <- pt(rej_set$left, df = df, lower.tail = T)
-    cali_rej_ub <- pt(rej_set$right, df = df, lower.tail = T)
+    cali_rej_lb <- pt(rej_set$left, df = df_X, lower.tail = T)
+    cali_rej_ub <- pt(rej_set$right, df = df_X, lower.tail = T)
     rej_mass <- sum(cali_rej_ub - cali_rej_lb)
   } else{
     rej_mass <- 0
@@ -18,8 +18,8 @@ y_sampler_cond_Sj <- function(sample_size, cali_rej_reg, kn_rej_reg, j,
   # mass of (kn rejection set) - (calibration rejection set)
   rest_set <- interval_minus(kn_rej_reg, cali_rej_reg)
   if(!is.null(rest_set$left)){
-    cali_rest_lb <- pt(rest_set$left, df = df, lower.tail = T)
-    cali_rest_ub <- pt(rest_set$right, df = df, lower.tail = T)
+    cali_rest_lb <- pt(rest_set$left, df = df_X, lower.tail = T)
+    cali_rest_ub <- pt(rest_set$right, df = df_X, lower.tail = T)
     rest_mass <- sum(cali_rest_ub - cali_rest_lb)
   } else{
     rest_mass <- 0
@@ -50,7 +50,7 @@ y_sampler_cond_Sj <- function(sample_size, cali_rej_reg, kn_rej_reg, j,
   rej_size <- round(sample_size * rej_sample_prop)
   if(rej_size > 0){
     rej_p <- runif_intervals(cali_rej_lb, cali_rej_ub, rej_size)
-    rej_t <- qt(rej_p, df = df, lower.tail = T)
+    rej_t <- qt(rej_p, df = df_X, lower.tail = T)
 
     rej_weight <- rej_mass / rej_sample_prop
     rej_weights <- rep(rej_weight, rej_size)
@@ -66,7 +66,7 @@ y_sampler_cond_Sj <- function(sample_size, cali_rej_reg, kn_rej_reg, j,
   rest_size <- sample_size - rej_size
   if(rest_size > 0){
     rest_p <- runif_intervals(cali_rest_lb, cali_rest_ub, rest_size)
-    rest_t <- qt(rest_p, df = df, lower.tail = T)
+    rest_t <- qt(rest_p, df = df_X, lower.tail = T)
 
     rest_weight <- rest_mass / (1 - rej_sample_prop)
     rest_weights <- rep(rest_weight, rest_size)
@@ -94,26 +94,28 @@ y_sampler_cond_Sj <- function(sample_size, cali_rej_reg, kn_rej_reg, j,
   }
 
   # convert the samples of T_j to response vector y
-  sample_vjy <- tj_to_vjy(sample_t, y_Pi_Xnoj_res_norm2, df)
+  sample_vjy <- tj_to_vjy(sample_t, RSS_Xnoj, df_X)
   y_results <- vjy_to_y(sample_vjy, j, y.pack, X.pack)
 
-  return(list(y_samples = y_results$y_samples, sample_weights = sample_weights,
-              weights = list(rej_weight = rej_weight, rest_weight = rest_weight),
-              sigmahat_X_res = y_results$sigmahat_X_res,
-              sigmahat_XXk_res = y_results$sigmahat_XXk_res))
+  return(list(samples.y = y_results$y,
+              samples.RSS_X = y_results$RSS_X,
+              samples.RSS_XXk = y_results$RSS_XXk,
+              df_X = df_X,
+              df_XXk = y_results$df_XXk,
+              samples.weight = sample_weights,
+              weights = list(rej_weight = rej_weight, rest_weight = rest_weight)))
 }
 
 
 # determine should we couple the Monte-Carlo samples in computing E_j to improve
 # efficiency
-couple_samples <- function(n, p, cali_rej_set, kn_rej_set){
-  df <- n-p
+couple_samples <- function(df_X, cali_rej_set, kn_rej_set){
 
   # compute mass of the calibration rejection set
   rej_set <- cali_rej_set
   if(!is.null(rej_set$left)){
-    cali_rej_lb <- pt(rej_set$left, df = df, lower.tail = T)
-    cali_rej_ub <- pt(rej_set$right, df = df, lower.tail = T)
+    cali_rej_lb <- pt(rej_set$left, df = df_X, lower.tail = T)
+    cali_rej_ub <- pt(rej_set$right, df = df_X, lower.tail = T)
     rej_mass <- sum(cali_rej_ub - cali_rej_lb)
   } else{
     return(F)
@@ -122,8 +124,8 @@ couple_samples <- function(n, p, cali_rej_set, kn_rej_set){
   # compute mass of the rest rejection set
   rest_set <- interval_minus(kn_rej_set, cali_rej_set)
   if(!is.null(rest_set$left)){
-    cali_rest_lb <- pt(rest_set$left, df = df, lower.tail = T)
-    cali_rest_ub <- pt(rest_set$right, df = df, lower.tail = T)
+    cali_rest_lb <- pt(rest_set$left, df = df_X, lower.tail = T)
+    cali_rest_ub <- pt(rest_set$right, df = df_X, lower.tail = T)
     rest_mass <- sum(cali_rest_ub - cali_rest_lb)
   } else{
     return(F)
@@ -133,17 +135,18 @@ couple_samples <- function(n, p, cali_rej_set, kn_rej_set){
   # reduce vairance, otherwise don't to avoid over sampling in a relatively
   # small region
   threshold <- 3
-  sample_coupling <- (rej_mass / rest_mass <= threshold) && (rest_mass / rej_mass <= threshold)
+  sample_coupling <- (rej_mass / rest_mass <= threshold) &&
+    (rest_mass / rej_mass <= threshold)
 
   return(sample_coupling)
 }
 
 # find the set of tval[j] where Hj rejected by calibration conditional on Sj
 where_cali_rej <- function(j, y.pack, X.pack){
-  df <- y.pack$df
-  y_Pi_Xnoj_res_norm2 <- y.pack$y_Pi_Xnoj_res_norm2[j]
+  df_X <- y.pack$y.data$df_X
+  RSS_Xnoj <- y.pack$RSS_Xnoj[j]
 
-  Xjy_obs <- sum(X.pack$X[, j] * y.pack$y)
+  Xjy_obs <- sum(X.pack$X[, j] * y.pack$y.data$y)
   Xjy_obs_counter <- 2 * y.pack$Xy_bias[j] - Xjy_obs
   X_proj_v <- sum(X.pack$X[, j] * X.pack$vj_mat[, j])
   vjy_obs_counter <- (Xjy_obs_counter - (Xjy_obs - y.pack$vjy_obs[j] * X_proj_v)) / X_proj_v
@@ -151,18 +154,18 @@ where_cali_rej <- function(j, y.pack, X.pack){
   vjy_rej_points <- sort(c(y.pack$vjy_obs[j], vjy_obs_counter))
 
   # max boundary of the values
-  t_bound <- abs(qt(1e-14, df = df))
-  vjy_bound <- tj_to_vjy(t_bound, y_Pi_Xnoj_res_norm2, df)
+  t_bound <- abs(qt(1e-14, df = df_X))
+  vjy_bound <- tj_to_vjy(t_bound, RSS_Xnoj, df_X)
 
   rej_set <- list(left = NULL, right = NULL)
 
   # convert vjy to t-val
   if(vjy_rej_points[1] > -vjy_bound){
     rej_set$left <- c(rej_set$left, -t_bound)
-    rej_set$right <- c(rej_set$right, vjy_to_tj(vjy_rej_points[1], y_Pi_Xnoj_res_norm2, df))
+    rej_set$right <- c(rej_set$right, vjy_to_tj(vjy_rej_points[1], RSS_Xnoj, df_X))
   }
   if(vjy_rej_points[2] < vjy_bound){
-    rej_set$left <- c(rej_set$left, vjy_to_tj(vjy_rej_points[2], y_Pi_Xnoj_res_norm2, df))
+    rej_set$left <- c(rej_set$left, vjy_to_tj(vjy_rej_points[2], RSS_Xnoj, df_X))
     rej_set$right <- c(rej_set$right, t_bound)
   }
 
@@ -174,8 +177,8 @@ where_kn_rej <- function(kn_alpha, j, y.pack, X.pack,
                          statistic,
                          method = "local_lin_reg",
                          kn_stat_samples = NULL){
-  df <- y.pack$df
-  y_Pi_Xnoj_res_norm2 <- y.pack$y_Pi_Xnoj_res_norm2[j]
+  df_X <- y.pack$y.data$df_X
+  RSS_Xnoj <- y.pack$RSS_Xnoj[j]
 
   # find the approximated knockoff rejection region in vjy
   if(is.null(kn_stat_samples)){
@@ -209,12 +212,14 @@ where_kn_rej <- function(kn_alpha, j, y.pack, X.pack,
     right_vjy <- right
 
     # convert vjy to t-val
-    left_t <- vjy_to_tj(left_vjy, y_Pi_Xnoj_res_norm2, df)
-    right_t <- vjy_to_tj(right_vjy, y_Pi_Xnoj_res_norm2, df)
+    left_t <- vjy_to_tj(left_vjy, RSS_Xnoj, df_X)
+    right_t <- vjy_to_tj(right_vjy, RSS_Xnoj, df_X)
 
 
-    t_bound <- abs(qt(1e-14, df = df))
-    boundary_t <- vjy_to_tj(c(kn_stat_samples$vjy_nodes[1], kn_stat_samples$vjy_nodes[length(kn_stat_samples$vjy_nodes)]), y_Pi_Xnoj_res_norm2, df)
+    t_bound <- abs(qt(1e-14, df = df_X))
+    boundary_t <- vjy_to_tj(c(kn_stat_samples$vjy_nodes[1],
+                              kn_stat_samples$vjy_nodes[length(kn_stat_samples$vjy_nodes)]),
+                            RSS_Xnoj, df_X)
     if(left_t[1] <= min(boundary_t)+1e-7){
       left_t[1] <- min(left_t[1], -t_bound)
     }
@@ -238,17 +243,18 @@ where_kn_rej <- function(kn_alpha, j, y.pack, X.pack,
 # bound W_{(\hat k)} on the them.
 kn_stat_sampling <- function(kn_alpha, j, y.pack, X.pack, node_num = 10,
                              statistic){
-  df <- y.pack$df
-  y_Pi_Xnoj_res_norm2 <- y.pack$y_Pi_Xnoj_res_norm2[j]
+  df_X <- y.pack$y.data$df_X
+  RSS_Xnoj <- y.pack$RSS_Xnoj[j]
   vjy_obs <- y.pack$vjy_obs[j]
 
   # compute the bounds of the finite interval to interpolate/LLR
-  tj_bound <- qt(5e-3, df = df, lower.tail = F)
-  vjy_bound <- max(abs(tj_to_vjy(tj_bound, y_Pi_Xnoj_res_norm2, df)), abs(vjy_obs))
+  tj_bound <- qt(5e-3, df = df_X, lower.tail = F)
+  vjy_bound <- max(abs(tj_to_vjy(tj_bound, RSS_Xnoj, df_X)), abs(vjy_obs))
   vjy_nodes <- seq(-vjy_bound, vjy_bound, length.out = node_num)
 
   y_results <- vjy_to_y(vjy_nodes, j, y.pack, X.pack)
-  y_nodes <- y_results$y_samples
+  y_nodes <- y_results$y
+  sigmahat.XXk_res <- sqrt(y_results$RSS_XXk / y_results$df_XXk)
 
   # compute the kn-stat Wj, the kn-rejection lower bound W_{(hat k)} on the nodes
   kn_abs_stat_j <- rep(NA, node_num)
@@ -256,7 +262,7 @@ kn_stat_sampling <- function(kn_alpha, j, y.pack, X.pack, node_num = 10,
   for(node_i in 1:node_num){
     if("sigma_tilde" %in% names(formals(statistic))){
       kn_stats <- statistic(X.pack$X, X.pack$X_kn, y_nodes[, node_i],
-                            sigma_tilde = y_results$sigmahat_XXk_res[node_i])
+                            sigma_tilde = sigmahat.XXk_res[node_i])
     } else{
       kn_stats <- statistic(X.pack$X, X.pack$X_kn, y_nodes[, node_i])
     }
@@ -327,55 +333,54 @@ region_F1geqF2 <- function(x, y1, y2, method, n_eval = 100){
 
 
 # convert vj^T y to corresponding t-statistic
-vjy_to_tj <- function(vjy, y_Pi_Xnoj_res_norm2, df){
-  tj <- vjy / sqrt((y_Pi_Xnoj_res_norm2 - vjy^2) / df)
+vjy_to_tj <- function(vjy, RSS_Xnoj, df){
+  tj <- vjy / sqrt((RSS_Xnoj - vjy^2) / df)
 }
 
 # convert t-statistic t_j to corresponding vj^T y
-tj_to_vjy <- function(tj, y_Pi_Xnoj_res_norm2, df){
-  vjy <-  tj * sqrt(y_Pi_Xnoj_res_norm2 / (tj^2 + df))
+tj_to_vjy <- function(tj, RSS_Xnoj, df){
+  vjy <-  tj * sqrt(RSS_Xnoj / (tj^2 + df))
 }
 
 # recover y from vjy conditional on Sj
 vjy_to_y <- function(sample_vjy, j, y.pack, X.pack){
   # retrieve data about X
-  Xk_dim <- y.pack$p
-  XXk_res_dim <- y.pack$n - 2*y.pack$p
+  p <- NCOL(X.pack$X_kn)
+  df_XXk <- y.pack$y.data$df_XXk
   vj <- X.pack$vj_mat[, j]
 
   # retrieve data about the observed y
-  y_Pi_Xnoj_res_norm2 <- y.pack$y_Pi_Xnoj_res_norm2[j]
+  RSS_Xnoj <- y.pack$RSS_Xnoj[j]
   y_Pi_Xnoj <- y.pack$y_Pi_Xnoj[, j]
 
   sample_size <- length(sample_vjy)
 
   # square norm of y in residue of X
-  y_Pi_X_res_norm2_sample <- y_Pi_Xnoj_res_norm2 - sample_vjy^2
+  RSS_X_sample <- RSS_Xnoj - sample_vjy^2
 
   ## sample the y projected on to the residue of X
-  # coordinates of y in (Pi_{X}^\perp Xk) under the QR orthogonal basis
-  y_Pi_X_res_Xk_sample <- matrix(rnorm(Xk_dim * sample_size), ncol = sample_size)
+  # coordinates of y in (Pi_{X}^\perp Xk) in the QR orthonormal basis
+  y_Pi_X_res_Xk_sample <- matrix(rnorm(p * sample_size), ncol = sample_size)
   # square norm of y in (Pi_{[X Xk]}^\perp), note the direction is ancillary
-  y_Pi_XXk_res_norm2_sample <- rchisq(sample_size, df = XXk_res_dim)
+  RSS_XXk_sample <- rchisq(sample_size, df = df_XXk)
 
   # scale the above two variables to satisfy |Pi_{X}^\perp y|
-  y_res_X_norm2_scale <- (colSums(y_Pi_X_res_Xk_sample^2) + y_Pi_XXk_res_norm2_sample) / y_Pi_X_res_norm2_sample
-  y_Pi_X_res_Xk_sample <- scale(y_Pi_X_res_Xk_sample, center = F, scale = sqrt(y_res_X_norm2_scale))
-  y_Pi_XXk_res_norm2_sample <- y_Pi_XXk_res_norm2_sample / y_res_X_norm2_scale
+  RSS_X_scale <- (colSums(y_Pi_X_res_Xk_sample^2) + RSS_XXk_sample) / RSS_X_sample
+  y_Pi_X_res_Xk_sample <- scale(y_Pi_X_res_Xk_sample, center = F,
+                                scale = sqrt(RSS_X_scale))
+  RSS_XXk_sample <- RSS_XXk_sample / RSS_X_scale
 
-  # assemble y in (Pi_{X}^\perp), direction in (Pi_{[X Xk]}^\perp) is picked arbitrarily as XXk_res_unit
-  y_Pi_X_res_sample <- X.pack$X_res_Xk_basis %*% y_Pi_X_res_Xk_sample +
-    X.pack$XXk_res_unit %*% matrix(sqrt(y_Pi_XXk_res_norm2_sample), nrow = 1)
+  # assemble y in (Pi_{X}^\perp), direction in (Pi_{[X Xk]}^\perp) is suppressed
+  y_Pi_X_res_sample <- rbind(matrix(0, nrow = p, ncol = sample_size),
+                             y_Pi_X_res_Xk_sample)
 
   # assemble y
-  y_samples <- matrix(rep(y_Pi_Xnoj, sample_size), ncol = sample_size) + vj %*% matrix(sample_vjy, nrow = 1) + y_Pi_X_res_sample
+  y_samples <- matrix(rep(y_Pi_Xnoj, sample_size), ncol = sample_size) +
+    vj %*% matrix(sample_vjy, nrow = 1) + y_Pi_X_res_sample
 
-  # get the sigmahat for free, used for computing t-value and statistic
-  sigmahat_X_res <- sqrt(y_Pi_X_res_norm2_sample / (y.pack$n - y.pack$p))
-  sigmahat_XXk_res <- sqrt(y_Pi_XXk_res_norm2_sample / (y.pack$n - 2*y.pack$p))
-
-  return(list(y_samples = y_samples,
-              sigmahat_X_res = sigmahat_X_res, sigmahat_XXk_res = sigmahat_XXk_res))
+  return(list(y = y_samples,
+              RSS_X = RSS_X_sample, RSS_XXk = RSS_XXk_sample,
+              df_X = y.pack$y.data$df_X, df_XXk = df_XXk))
 }
 
 #' @importFrom utils tail

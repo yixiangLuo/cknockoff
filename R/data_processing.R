@@ -1,17 +1,20 @@
 # parse the arguments supplied to cknockoff()
-parse_args <- function(X, y, knockoffs, statistic,
+parse_args <- function(X, y, intercept,
+                       knockoffs, statistic,
                        alpha, Rstar_refine,
                        n_cores,
                        prelim_result, X.pack,
                        envir){
   # when cknockoff.result is supplied
   if(is(prelim_result, "cknockoff.result")){
+    X.pack <- prelim_result$record$X.pack
+    y.pack <- prelim_result$record$y.pack
+    intercept <- prelim_result$intercept
     X <- prelim_result$X
     y <- prelim_result$y
     knockoffs <- prelim_result$Xk
     statistic <- prelim_result$record$statistic
     alpha <- prelim_result$record$alpha
-    X.pack <- prelim_result$record$X.pack
 
     record <- c(prelim_result$record[c("iteration", "kn.selected",
                                        "checked_so_far", "next_check_num")],
@@ -31,7 +34,9 @@ parse_args <- function(X, y, knockoffs, statistic,
     X <- prelim_result$X
     y <- prelim_result$y
     knockoffs <- prelim_result$Xk
+    intercept <- (max(abs(c(colMeans(X), colMeans(knockoffs)))) < 1e-6)
     # X.pack <- NULL
+    y.pack <- NA
     record <- list(iteration = 0,
                    kn.statistic = prelim_result$statistic,
                    kn.selected = prelim_result$selected)
@@ -69,6 +74,7 @@ parse_args <- function(X, y, knockoffs, statistic,
   }
   else if((!missing(X) || !is.null(X.pack)) && !missing(y)){
     record <- NULL
+    y.pack <- NA
   }
   else{
     stop("X/X.pack and y must be provided if knockoff/cknockoff.result object isn't.")
@@ -82,9 +88,11 @@ parse_args <- function(X, y, knockoffs, statistic,
     knockoffs <- X.pack$X_kn
   }
 
-  return(list(X = X, y = y, knockoffs = knockoffs, statistic = statistic,
-              alpha = alpha, n_cores = n_cores, X.pack = X.pack,
-              Rstar_refine = Rstar_refine,record = record))
+  return(list(X = X, y = y, intercept = intercept,
+              X.pack = X.pack, y.pack = y.pack,
+              knockoffs = knockoffs, statistic = statistic,
+              alpha = alpha, n_cores = n_cores,
+              Rstar_refine = Rstar_refine, record = record))
 }
 
 # check if the arguments are valid
@@ -121,14 +129,16 @@ check_args <- function(args){
   }
 
   # Validate input dimensions
-
-  y.length <- length(c(args$y))
-  if(is(args$X.pack, "cknockoff.X.pack")){
-    if(y.length != NROW(args$X.pack$X) && y.length != args$X.pack$X.org.nrow){
+  if(is.na(args$y.pack)){
+    y.length <- length(c(args$y))
+    if(is(args$X.pack, "cknockoff.X.pack")){
+      if(y.length != NROW(args$X.pack$X.org) &&
+         y.length != args$X.pack$X.org.nrow){
+        stop("X and y have inconsistent number of rows.")
+      }
+    } else if(y.length != NROW(args$X)){
       stop("X and y have inconsistent number of rows.")
     }
-  } else if(y.length != NROW(args$X)){
-    stop("X and y have inconsistent number of rows.")
   }
 
   invisible()
@@ -137,10 +147,15 @@ check_args <- function(args){
 # preprocess the X and y for better efficiency
 process_args <- function(args){
   if(!is(args$X.pack, "cknockoff.X.pack")){
-    args$X.pack <- process_X(args$X, knockoffs = args$knockoffs)
+    args$X.pack <- process_X(args$X, knockoffs = args$knockoffs,
+                             intercept = args$intercept)
   }
-
-  args$y.pack <- process_y(args$X.pack, args$y, randomize = F)
+  if(is.na(args$y.pack)){
+    y.data <- transform_y(args$X.pack, args$y,
+                          intercept = args$intercept,
+                          randomize = F)
+    args$y.pack <- process_y(args$X.pack, y.data)
+  }
 
   # # not a good practice. Now this is a infinite self-reference.
   # # even after fixing this, arg is a large variable live in this local environment
@@ -164,8 +179,8 @@ process_args <- function(args){
 #' @param knockoffs either knockoff matrix of X or a knockoffs function that can
 #' generate it.
 #' If the knockoff matrix is supplied, both X and knockoffs should be properly
-#' normalized, e.g. using the returned X and Xk of the knockoff::create.fixed function.
-#' By default, knockoff::create.fixed is used.
+#' normalized, e.g. using the returned X and Xk of the ckn.create.fixed function.
+#' By default, ckn.create.fixed is used.
 #'
 #' @return An object of class "cknockoff.X.pack". This object is a list containing
 #' many matrices like the knockoff matrix and a basis of the linear space spanned by X, etc.
@@ -180,7 +195,7 @@ process_args <- function(args){
 #' y <- X %*% beta + rnorm(n)
 #' print(which(1:p %in% nonzero))
 #'
-#' X.pack <- process_X(X, knockoffs = knockoff::create.fixed)
+#' X.pack <- process_X(X, knockoffs = ckn.create.fixed)
 #'
 #' result <- cknockoff(X, y,
 #'                     alpha = 0.05,
@@ -190,7 +205,8 @@ process_args <- function(args){
 #'
 #'
 #' @export
-process_X <- function(X, knockoffs = knockoff::create.fixed){
+process_X <- function(X, knockoffs = ckn.create.fixed,
+                      intercept){
   # validate the arguments
   if(NCOL(X) <= 1){
     stop("X must have at least two columns.")
@@ -208,7 +224,7 @@ process_X <- function(X, knockoffs = knockoff::create.fixed){
     stop("X must be a numeric matrix or data frame.")
   }
 
-  X.org.nrow <- NROW(X)
+  n <- NROW(X)
   p <- NCOL(X)
 
   if(is.matrix(knockoffs)){
@@ -225,173 +241,146 @@ process_X <- function(X, knockoffs = knockoff::create.fixed){
     X_kn <- knockoffs
   } else if(is.function(knockoffs)){
     # augment X beforehead, otherwise y or sigma is needed in create.fixed
-    if(X.org.nrow < 2*p){
-      X <- rbind(X, matrix(0, 2*p-X.org.nrow, p))
+    if(n < 2*p+intercept){
+      X <- rbind(X, matrix(0, 2*p+intercept - n, p))
     }
-    kn_variables <- knockoffs(X)
+    kn_variables <- if("intercept" %in% names(formals(knockoffs))){
+      knockoffs(X, intercept = intercept)
+    } else{
+      knockoffs(X)
+    }
     X <- kn_variables$X
     X_kn <- kn_variables$Xk
   } else{
     stop("knockoff matrix/generating method of incorrect type.")
   }
 
-  n <- NROW(X)
+  # record X and Xk before rotating
+  X.org <- X
+  X_kn.org <- X_kn
 
-  # augment 2*p+1 in addition to 2*p to make sure X_kn has the last row = 0
-  if(n < 2*p+1){
-    warning('Input X has dimensions n < 2p+1. ',
-            'Augmenting the model with extra rows.', immediate.=T)
-    X <- rbind(X, matrix(0, 2*p+1-n, p))
-    X_kn <- rbind(X_kn, matrix(0, 2*p+1-n, p))
-    n <- 2*p+1
-  }
-
-  # if(method == "sdp"){
-  #   X_kn <- knockoff::create.fixed(X, method = "sdp")$Xk
-  # } else{
-  #   X_kn <- MRC_Xkn(X, method = method, normalize = T)
-  # }
-
-  # compute the basis matrices need by cknockoff
+  # QR decomposition of [X, Xk]
   QR <- qr(cbind(X, X_kn))
 
-  pivot_back <- 1:p
-  pivot_back[QR$pivot] <- pivot_back
+  pivot_back <- sort.list(QR$pivot)
 
-  Q_XXk <- qr.Q(QR, complete = T)
-  R_XXk <- qr.R(QR)
+  Q_XXk <- qr.Q(QR, complete = F)
+  R_XXk <- qr.R(QR, complete = F)[, pivot_back]
 
-  if(min(abs(diag(R_XXk)[pivot_back[1:p]])) < 1e-7){
-    stop("X doesn't have full column rank.")
+  # check regularity conditions
+  tol <- max(abs(diag(R_XXk)[1:2*p])) * 1e-5
+  if(max(abs(R_XXk[lower.tri(R_XXk, diag = F)])) > tol){
+    stop("In the QR decompostion of the augmented maxtrix [X, Xk], ",
+         "the resulted R matrix is not upper triangular. ",
+         "Please contact the maintainer.")
+  }
+  if(min(abs(diag(R_XXk)[1:p])) < tol){
+    stop(paste0("X", ifelse(intercept, "(along with intercept)", ""),
+                " doesn't have full column rank."))
   }
 
-  if(!identical(QR$pivot[1:p], 1:p)){
-    # if unintended pivoting happens, use process_X_robust instead
-    X.pack.data <- process_X_robust(X, X_kn)
-  } else{
-    X_basis <- Q_XXk[, 1:p]
-    X_res_Xk_basis <- Q_XXk[, (p+1):(2*p)]
-    XXk_res_unit <- Q_XXk[, (2*p+1)]
+  # rotate X and Xk by Q, then the new [X, Xk] are in the first 2p coordinates
+  X <- R_XXk[, 1:p]
+  X_kn <- R_XXk[, (p+1):(2*p)]
 
-    # compute vj = unit(X_{j.-j}), X_{j.-j} = X_j orthogonal projected onto X_{-j}. time O(p^3)
-    vj_mat <- sapply(1:p, function(j){
-      # Q_X[, j] = X_j orthogonal projected onto X_{1:j-1}
-      # X_{j.-j} = Q_X[, j] orthogonal projected onto S, S:=(X_{j+1:p} orthogonal projected onto X_{1:j-1})
-      #          <=> find a vector in span(X_{j:p}) that is perpendicular to S
-      # "coord" is the coordinate of such a vector under the basis Q_X[, j:p]
-      coord <- forwardsolve(t(R_XXk[j:p,j:p]), c(1, rep(0, p-j)))
-      vj <- Q_XXk[, j:p] %*% matrix(coord, nrow = p-j+1)
-      vj <- vj / sqrt(sum(vj^2))
-    })
+  # compute the a basic matrix needed by cknockoff
+  # compute vj = unit(X_{j.-j}), X_{j.-j} = X_j orthogonal projected onto X_{-j}. time O(p^3)
+  vj_mat <- sapply(1:p, function(j){
+    # Q_X[, j] = unit of X_j orthogonally projected onto X_{1:j-1}
+    # X_{j.-j} = Q_X[, j] orthogonal projected onto S, S:=(X_{j+1:p} orthogonal projected onto X_{1:j-1})
+    #          <=> find a vector in span(X_{j:p}) that is perpendicular to S
+    # "coord" is the coordinate of such a vector under the basis Q_X[, j:p]
+    Q_X <- diag(2*p)[, 1:p]
+    coord <- forwardsolve(t(R_XXk[j:p,j:p]), c(1, rep(0, p-j)))
+    vj <- Q_X[, j:p] %*% matrix(coord, nrow = p-j+1)
+    vj <- vj / sqrt(sum(vj^2))
+  })
 
-    X.pack.data <- list(X = X, X_kn = X_kn,
-                        X_basis = X_basis, vj_mat = vj_mat,
-                        X_res_Xk_basis = X_res_Xk_basis,
-                        XXk_res_unit = XXk_res_unit)
+  X.pack.data <- list(X = X, X_kn = X_kn,
+                      vj_mat = vj_mat,
+                      X.org = X.org, X_kn.org = X_kn.org,
+                      XXk.org.basis = Q_XXk)
 
-  }
-
-  X.pack <- structure(c(X.pack.data, list(X.names = X.names, X.org.nrow = X.org.nrow)),
-                       class = "cknockoff.X.pack")
+  X.pack <- structure(c(X.pack.data, list(X.names = X.names, X.org.nrow = n)),
+                      class = "cknockoff.X.pack")
 
   return(X.pack)
 
 }
 
-# implement the same function as process_X() in a more robust but less efficient way
-process_X_robust <- function(X, X_kn){
-  n <- NROW(X)
-  p <- NCOL(X)
 
-  QR_X <- qr(X)
 
-  Q_X <- qr.Q(QR_X, complete = T)
-  R_X <- qr.R(QR_X)
-
-  # qr(X) is possibly pivoted. The following matrices are only used as bases for the subspace.
-  X_basis <- Q_X[, 1:p]
-
-  # compute vj = unit(X_{j.-j}), X_{j.-j} = X_j orthogonal projected onto X_{-j}. time O(p^3)
-  vj_mat <- sapply(1:p, function(j){
-    # Q_X[, j] = X_j orthogonal projected onto X_{1:j-1}
-    # X_{j.-j} = Q_X[, j] orthogonal projected onto S, S:=(X_{j+1:p} orthogonal projected onto X_{1:j-1})
-    #          <=> find a vector in span(X_{j:p}) that is perpendicular to S
-    # "coord" is the coordinate of such a vector under the basis Q_X[, j:p]
-    coord <- forwardsolve(t(R_X[j:p,j:p]), c(1, rep(0, p-j)))
-    vj <- Q_X[, j:p] %*% matrix(coord, nrow = p-j+1)
-    vj <- vj / sqrt(sum(vj^2))
-  })
-  # pivot back
-  vj_mat[, QR_X$pivot] <- vj_mat
-
-  X_res_Xk <- X_kn - X_basis %*% (t(X_basis) %*% X_kn)
-
-  # run QR for X_res_Xk to avoid pivoting between X and Xk, which makes the calculation of vj_mat invalid.
-  QR_Xk <- qr(X_res_Xk)
-  Q_Xk <- qr.Q(QR_Xk, complete = F)
-  X_res_Xk_basis <- Q_Xk[, 1:p]
-
-  Q_XXk <- qr.Q(qr(cbind(X_basis, X_res_Xk_basis)), complete = T)
-  XXk_res_unit <- Q_XXk[, 2*p+1]
-
-  X.pack.data <- list(X = X, X_kn = X_kn,
-                      X_basis = X_basis, vj_mat = vj_mat,
-                      X_res_Xk_basis = X_res_Xk_basis,
-                      XXk_res_unit = XXk_res_unit)
-
-  return(X.pack.data)
-}
-
-# pre-process y
-process_y <- function(X.pack, y, randomize = F){
-
-  n <- NROW(X.pack$X)
+transform_y <- function(X.pack, y,
+                        intercept,
+                        randomize = F){
+  n <- length(y)
   p <- NCOL(X.pack$X)
-  df <- n-p
 
-  y.org.nrow <- length(y)
+  # center y if necessary
+  y <- scale(y, center = intercept, scale = F)
 
-  y <- matrix(y, nrow = 1)
-  y_Pi_X <- X.pack$X_basis %*% t(y %*% X.pack$X_basis[1:y.org.nrow, ])
-  y_Pi_X_res_norm2 <- sum(y^2) - sum(y_Pi_X^2)
+  # compute RSS and degree of freedom in y ~ X
+  RSS_X <- sum(y^2) - sum((matrix(y, nrow=1) %*% X.pack$XXk.org.basis[1:n, 1:p])^2)
+  df_X <- n - p - intercept
 
   # augment y if needed
-  if(y.org.nrow < 2*p){
+  if(n < 2*p+intercept){
     if(randomize){
-      y.extra <- rnorm(2*p-y.org.nrow,
-                       sd = sqrt(y_Pi_X_res_norm2 / (X.pack$X.org.nrow - p)))
+      y.extra <- rnorm(2*p-n+intercept, sd = sqrt(RSS_X / df_X))
     } else{
-      y.extra <- with_seed(0, rnorm(2*p-y.org.nrow,
-                                    sd = sqrt(y_Pi_X_res_norm2 / (X.pack$X.org.nrow - p))))
+      y.extra <- with_seed(0, rnorm(2*p-n+intercept, sd = sqrt(RSS_X / df_X)))
     }
     y <- c(y, y.extra)
   }
-  if(y.org.nrow < 2*p+1){
-    y <- c(y, sqrt(y_Pi_X_res_norm2 / (X.pack$X.org.nrow - p)))
+
+  # record the original y before rotation
+  y.org <- y
+
+  # rotate y in the same way as we did for [X Xk]
+  y.norm2 <- sum(y^2)
+  y <- as.vector(matrix(y, nrow=1) %*% X.pack$XXk.org.basis)
+
+  # the component of y not in the 2p-dim subspace (residue of y~[X Xk])
+  # is recorded separately as RSS_XXk and df_XXk
+  if(n < 2*p+intercept+1){
+    RSS_XXk <- RSS_X
+    df_XXk <- df_X
+  } else{
+    RSS_XXk <- y.norm2 - sum(y^2)
+    df_XXk <- n - 2*p
   }
-  y_Pi_X_res_norm2 <- sum(y^2) - sum(y_Pi_X^2)
 
-  # prepare the quantities needed by cknockoff based on y
-  y <- matrix(y, nrow = 1)
+  y.data <- list(y = y, y.org = y.org,
+                 RSS_X = RSS_X, RSS_XXk = RSS_XXk,
+                 df_X = df_X, df_XXk = df_XXk)
+  return(y.data)
 
-  vjy_obs <- c(y %*% X.pack$vj_mat)
+}
+
+# prepare the quantities needed by cknockoff based on y
+process_y <- function(X.pack, y.data){
+  p <- NCOL(X.pack$X)
+
+  y_Pi_X <- c(y.data$y[1:p], rep(0, p))
+
+  vjy_obs <- c(matrix(y.data$y, nrow=1) %*% X.pack$vj_mat)
 
   y_Pi_Xnoj <- sapply(1:p, function(j){
     y_Pi_X - X.pack$vj_mat[, j] * vjy_obs[j]
   })
 
-  y_Pi_Xnoj_res_norm2 <- y_Pi_X_res_norm2 + vjy_obs^2
-  sigmahat_XXk_res <- sqrt((y_Pi_X_res_norm2 - sum((y %*% X.pack$X_res_Xk_basis)^2)) / (n - 2*p))
+  RSS_Xnoj <- y.data$RSS_X + vjy_obs^2
+  # sigmahat.XXk_res <- sqrt(y.data$RSS_XXk / y.data$df_XXk)
 
   # placeholder, will be computed later in cknockoff()
   Xy_bias <- rep(NA, p)
 
-  return(list(n = n, p = p, df = df, y = as.vector(y), vjy_obs = vjy_obs,
-              y_Pi_X_res_norm2 = y_Pi_X_res_norm2, y_Pi_Xnoj_res_norm2 = y_Pi_Xnoj_res_norm2,
-              sigmahat_XXk_res = sigmahat_XXk_res,
+  return(list(y.data = y.data, vjy_obs = vjy_obs,
+              RSS_Xnoj = RSS_Xnoj,
               y_Pi_Xnoj = y_Pi_Xnoj,
               Xy_bias = Xy_bias))
 }
+
 
 # load packages and prepare snips for parallel computing
 process_parallel <- function(n_cores){

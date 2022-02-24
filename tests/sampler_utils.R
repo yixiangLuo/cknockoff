@@ -106,7 +106,7 @@ corr_noise <- function(n, rho){
 
 
 # compute the t-vals of a linear regression test problem
-lm_to_t <- function(y, X, Sigma = NULL){
+lm_to_t <- function(y, X, Sigma = NULL, sigmahat = NULL){
   n <- NROW(X)
   p <- NCOL(X)
 
@@ -117,7 +117,9 @@ lm_to_t <- function(y, X, Sigma = NULL){
   df <- n - p
 
   zvals <- Sigma %*% Xy
-  sigmahat <- as.numeric(sqrt((sum(y^2) - t(Xy) %*% zvals) / df))
+  if(is.null(sigmahat)){
+    sigmahat <- as.numeric(sqrt((sum(y^2) - t(Xy) %*% zvals) / df))
+  }
   tvals <- zvals / sqrt(diag(Sigma)) / sigmahat
 
   return(list(tvals = tvals, df = df))
@@ -128,7 +130,7 @@ BH_lm <- function(y, X, side = "two", alpha,
                   weights = rep(1, NCOL(X)) / NCOL(X),
                   Sigma = NULL){
 
-  t_result <- lm_to_t(y, X, Sigma)
+  t_result <- lm_to_t(y, X, Sigma = Sigma)
   pvals <- pvals_t(t_result$tvals, t_result$df, side = "two")
 
   BH_result <-  BH_weighted(pvals, alpha, weights)

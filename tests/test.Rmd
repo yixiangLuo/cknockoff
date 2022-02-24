@@ -72,7 +72,8 @@ source("sampler_plot.R")
 ## problem settings
 p <- 100 # number of features ("m" in our paper)
 n <- p*3 # number of data points
-X_type = "MCC" # type of the design matrix, see function gene_X() in sampler_utils.R
+X_type <- "MCC" # type of the design matrix, see function gene_X() in sampler_utils.R
+intercept <- T # if fit with a intercept term
 
 mc_size <- 200 # Monte-Carlo sample size
 target <- 0.5 # power of BH at level 0.2, this determines the signal strength
@@ -85,6 +86,7 @@ naive_sampler <- F # shoule we use the naive sampler or our actual sampler
 # see meaning of the arguments in the definition of the function in "sampler_main.R"
 ineq_invest <- invest_ineq(n, p, mc_size,
                            X_type = X_type, 
+                           intercept,
                            target, alpha,
                            alt_num = 10, y_seed = 12,
                            invest_j,
@@ -94,8 +96,8 @@ ineq_invest <- invest_ineq(n, p, mc_size,
                            # statistic = stat.glmnet_coefdiff_lm,
                            statistic = stat.glmnet_lambdasmax_lm,
                            # noise = quote(corr_noise(n, rho = 0.999))
-                           quote(rt(n, df = 3))
-                           # noise = quote(rnorm(n))
+                           # noise = quote(rt(n, df = 3))
+                           noise = quote(rnorm(n))
                            )
 
 # the invest_ineq() will print several results as a test for our sampler
@@ -148,10 +150,20 @@ print("vjy at the boundary of the earli-stopping knockoff rejection set:")
 print(ineq_invest$kn_rej_set$left_vjy)
 print(ineq_invest$kn_rej_set$right_vjy)
 
+x <- ineq_invest$vjy_mc
+index <- which(x > 0)
+x <- x[index]
+y <- abs(as.data.frame(ineq_invest$kn_stats_mc)[[paste0("V", invest_j)]])
+y <- y[index]
+lm_fit <- lm(y ~ x)
+y_mean <- lm_fit$fitted.values
+y_var <- abs(lm(lm_fit$residuals^2 ~ x)$fitted.values)
+print(max(sqrt(y_var) / y_mean))
+
 ```
 
 
-```{r test_Rstar}
+```{r test_Rstar, eval=F}
 
 # test if our R* calculation (function cknockoff_Rstar()) is correct
 # if so, we should see the R* rejection set is a subset of cknockoff (call it
@@ -243,7 +255,7 @@ print(paste(inconsistent_sel_num, "out of", total_Rstar_sel, "selection in Rstar
 
 
 
-```{r}
+```{r example, eval=F}
 # example of applying cknockoff and cknockoff*, as a simple test
 
 p <- 100; n <- 300; k <- 15
@@ -251,16 +263,53 @@ X <- matrix(rnorm(n*p), n)
 nonzero <- sample(p, k)
 beta <- 1 * (1:p %in% nonzero)
 # beta <- 0.2 * (1:p %in% nonzero)
-y <- X %*% beta + rnorm(n)
+y <- X %*% beta + rnorm(n) + 0
 print(which(1:p %in% nonzero))
 
+intercept <- F
+
 # Basic usage
-result <- cknockoff(X, y, alpha = 0.05, n_cores = 1)
+result <- cknockoff(X, y, intercept = intercept, alpha = 0.05, n_cores = 1)
 print(result$selected)
 
-result <- cknockoff(X, y, alpha = 0.05, n_cores = 1, Rstar_refine = T)
+result <- cknockoff(X, y, intercept = intercept, alpha = 0.05, n_cores = 1, Rstar_refine = T)
 print(result$selected)
 
+```
+
+
+```{r}
+np_ratio <- seq(from = 4, to = 20, by = 2)
+runtime_scale <- sapply(np_ratio, function(ratio){
+  p <- 100; n <- ratio*p; k <- 15
+  X <- matrix(rnorm(n*p), n)
+  nonzero <- sample(p, k)
+  # beta <- 1 * (1:p %in% nonzero)
+  beta <- 0.2 * (1:p %in% nonzero)
+  y <- X %*% beta + rnorm(n)
+  
+  time_start <- Sys.time()
+  foo <- replicate(5, {
+    cknockoff(X, y, alpha = 0.1, n_cores = 1)
+    # QR <- qr(cbind(X, X + diag(nrow = n, ncol = p)))
+    # Q_XXk <- qr.Q(QR, complete = T)
+    # glmnet::glmnet(X, y, lambda = 2/n,
+    #               intercept = T, standardize = F,
+    #               standardize.response = F, family = "gaussian")
+    })
+  time_end <- Sys.time()
+  runtime <- difftime(time_end, time_start, units = "secs")[[1]]
+  
+  return(runtime)
+})
+
+data.frame(ratio = np_ratio, runtime = runtime_scale) %>%
+ggplot(aes(x = ratio, y = runtime)) +
+  geom_line() +
+  geom_point() +
+  labs(x = "n/m", y = "runtime")
+
+# ggsave(filename = "glmnet_scale.pdf")
 ```
 
 
@@ -268,4 +317,42 @@ print(result$selected)
 
 
 
+```{r example, eval=F}
+library(knockoff)
+library(foreach)
+library(doParallel)
+
+n_cores <- 10
+
+p <- 2
+n <- 10
+
+X1 <- c(0, rep(1, n-1))  # X1 highly correlated with rep(1, n)
+X2 <- c(rep(0, n/2), rep(1, n/2))  # X2 correlated with X1 and rep(1, n)
+# X2 <- c(1, rep(0, n-1))  # X2 correlated with X1 and rep(1, n)
+X <- cbind(X1, X2)
+
+beta <- c(0, 0)  # all variables are null
+
+kn_vars <- create.fixed(X) # create knockoff matrix
+
+set.seed(2022)
+
+registerDoParallel(n_cores)
+W_signs <- unlist(foreach(i = 1:n_cores) %dopar% {
+  set.seed(i)
+  W_signs <- replicate(500, {
+    y <- X %*% beta + rnorm(n)
+    W <- stat.glmnet_lambdasmax(kn_vars$X, kn_vars$Xk, y)
+    return(sign(W[1]))  # sign of W_1, expected to be Unif{+1, -1}
+  })
+})
+
+
+noties <- sum(W_signs != 0) # neglect the cases where W_1 = 0
+
+print(sum(W_signs > 0) / noties) # expect to be close to 0.5, but not,
+print(sum(rbinom(noties, 1, 0.5) > 0) / noties) # comparing to this standard
+
+```
 

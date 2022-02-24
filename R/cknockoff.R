@@ -10,12 +10,14 @@ NULL
 #'
 #' @param X n-by-p matrix or data frame of features.
 #' @param y response vector of length n.
+#' @param intercept Should intercept be fitted (default=TRUE) or set to zero
+#' (FALSE).
 #' @param knockoffs method used to construct the knockoff matrix for X.
 #' It should be a function taking a n-by-p matrix as input and returning a n-by-p
 #' matrix of knockoff variables.
 #' It is the same as the \code{knockoffs} argument in
 #' \code{knockoff::knockoff.filter}.
-#' By default, \code{knockoff::create.fixed} is used.
+#' By default, \code{ckn.create.fixed} is used.
 #' @param statistic the knockoff feature statistics (W-statistics) function used
 #' to assess variable importance.
 #' Any function in the family "statistics" in the R package \code{knockoff} that
@@ -112,7 +114,7 @@ NULL
 #' # knockoff rejection
 #' library("knockoff")
 #' kn.result <- knockoff.filter(X, y,
-#'                              knockoffs = create.fixed,
+#'                              knockoffs = ckn.create.fixed,
 #'                              statistic = stat.glmnet_coefdiff_lm,
 #'                              # must specify this argument explicitly
 #'                              fdr = 0.05
@@ -134,10 +136,11 @@ NULL
 #'
 #' @export
 cknockoff <- function(X, y,
-                      knockoffs = knockoff::create.fixed,
+                      intercept = TRUE,
+                      knockoffs = ckn.create.fixed,
                       statistic = stat.glmnet_coefdiff_lm,
                       alpha = 0.05,
-                      Rstar_refine = F,
+                      Rstar_refine = FALSE,
                       n_cores = 1,
                       prelim_result = NULL,
                       X.pack = NULL){
@@ -154,7 +157,8 @@ cknockoff <- function(X, y,
   # cknockoff.call[[1]] <- as.symbol("parse_args")
   # args <- eval(cknockoff.call)
   envir <- parent.frame()
-  args <- parse_args(X, y, knockoffs, statistic,
+  args <- parse_args(X, y, intercept,
+                     knockoffs, statistic,
                      alpha, Rstar_refine,
                      n_cores,
                      prelim_result, X.pack,
@@ -165,8 +169,9 @@ cknockoff <- function(X, y,
   args <- process_args(args)
   X.pack <- args$X.pack
   y.pack <- args$y.pack
+  intercept <- args$intercept
   X <- X.pack$X
-  y <- y.pack$y
+  y <- y.pack$y.data$y
   statistic <- args$statistic
   alpha <- args$alpha
   n_cores <- args$n_cores
@@ -190,13 +195,13 @@ cknockoff <- function(X, y,
 
   n <- NROW(X)
   p <- NCOL(X)
-  df <- n - p
 
   # knockoff rejection
   if(is.null(record)){
     if("sigma_tilde" %in% names(formals(statistic))){
       kn_stats_obs <- statistic(X, X.pack$X_kn, y,
-                                sigma_tilde = y.pack$sigmahat_XXk_res)
+                                sigma_tilde = sqrt(y.pack$y.data$RSS_XXk
+                                                   / y.pack$y.data$df_XXk))
     } else{
       kn_stats_obs <- statistic(X, X.pack$X_kn, y)
     }
@@ -217,14 +222,15 @@ cknockoff <- function(X, y,
   }
 
   # find the promising features not selected or checked yet
-  tvals_obs <- y_to_t(y, X.pack$vj_mat, sqrt(y.pack$y_Pi_X_res_norm2 / df))
-  pvals_obs <- pvals_t(tvals_obs, df = df, side = "two")
+  tvals_obs <- y_to_t(y, X.pack$vj_mat, sqrt(y.pack$y.data$RSS_X
+                                             / y.pack$y.data$df_X))
+  pvals_obs <- pvals_t(tvals_obs, df = y.pack$y.data$df_X, side = "two")
 
   candidates <- cKn_candidates(kn_stats_obs, pvals_obs, alpha, record, selected)
 
   # compute the observed calibration statistics
   for(j in candidates){
-    sigma_est <- sqrt(y.pack$y_Pi_Xnoj_res_norm2[j] / (n-p+1)) # overestimate sigma
+    sigma_est <- sqrt(y.pack$RSS_Xnoj[j] / (y.pack$y.data$df_X+1)) # overestimate sigma
     fit_on_rest <- glmnet::glmnet(X[, -j], y,
                                   lambda = 2 * sigma_est / n,
                                   intercept=T, standardize=F, standardize.response=F,
@@ -233,7 +239,7 @@ cknockoff <- function(X, y,
   }
   cali_stats_obs <- abs(c(matrix(y, nrow = 1) %*% X) - y.pack$Xy_bias)
 
-  # the confidence sequence alpha for controling Monte-Carlo error
+  # the confidence sequence alpha for controlling Monte-Carlo error
   rej_alpha <- min(0.05, alpha * max(1, length(init_selected)) / length(candidates))
 
   # check each hypothesis in sequence/parallel
@@ -256,7 +262,7 @@ cknockoff <- function(X, y,
     cali_rej_set <- where_cali_rej(j, y.pack, X.pack)
 
     # couple the samples?
-    sample_coupling <- couple_samples(n, p, cali_rej_set, kn_rej_set)
+    sample_coupling <- couple_samples(y.pack$y.data$df_X, cali_rej_set, kn_rej_set)
 
     # storage for recording the calculated statistics for post-hoc Rstar refinement
     calc_Rstar_online <- F
@@ -271,49 +277,53 @@ cknockoff <- function(X, y,
       Ej_samples <- c(Ej_samples, rep(NA, mc_size))
 
       # generate Monte-Carlo samples of y conditional Sj for this batch
-      sample_res <- y_sampler_cond_Sj(mc_size, cali_rej_set, kn_rej_set, j,
-                                      y.pack, X.pack, sample_coupling)
+      samples.res <- y_sampler_cond_Sj(mc_size, cali_rej_set, kn_rej_set, j,
+                                       y.pack, X.pack, sample_coupling)
 
       # make decision if we can tell whether Ej <=0 based on the sampling region
-      if(is.numeric(sample_res) && mc_round == 1){
-        if(sample_res == 0) break
-        else if(sample_res == 1){
+      if(is.numeric(samples.res) && mc_round == 1){
+        if(samples.res == 0) break
+        else if(samples.res == 1){
           break
         }
-        else if(sample_res == -1){
+        else if(samples.res == -1){
           select_j <- T
           break
         }
       }
 
       # retrive the samples
-      y_cond <- sample_res$y_samples
-      sample_weights <- sample_res$sample_weights
-      sigmahat_X_res <- sample_res$sigmahat_X_res
-      sigmahat_XXk_res <- sample_res$sigmahat_XXk_res
+      samples.y <- samples.res$samples.y
+      samples.weight <- samples.res$samples.weight
+      sigmahat.XXk_res <- sqrt(samples.res$samples.RSS_XXk / samples.res$df_XXk)
 
       # the upper and lower bound of Ej for constructing confidence sequence.
-      Ej_bounds <- get_Ej_bound(alpha, p, sample_res$weights, sample_coupling)
+      Ej_bounds <- get_Ej_bound(alpha, p, samples.res$weights, sample_coupling)
 
       # for each y MC sample in conditional calibration
       for(mc_i in 1:mc_size){
 
         # compute knockoff stat
         if("sigma_tilde" %in% names(formals(statistic))){
-          kn_stat_mc <- statistic(X, X.pack$X_kn, y_cond[, mc_i],
-                                  sigma_tilde = sigmahat_XXk_res[mc_i])
+          kn_stat_mc <- statistic(X, X.pack$X_kn, samples.y[, mc_i],
+                                  sigma_tilde = sigmahat.XXk_res[mc_i])
         } else{
-          kn_stat_mc <- statistic(X, X.pack$X_kn, y_cond[, mc_i])
+          kn_stat_mc <- statistic(X, X.pack$X_kn, samples.y[, mc_i])
         }
 
         # compute calibration stat
-        cali_stat_mc <- abs(sum(X[, j] * y_cond[, mc_i]) - y.pack$Xy_bias[j])
+        cali_stat_mc <- abs(sum(X[, j] * samples.y[, mc_i]) - y.pack$Xy_bias[j])
 
         # do Rstar refinement in realtime?
         if(calc_Rstar_online){
-          Rstar.pack <- list(X.pack = X.pack, y_mc = y_cond[, mc_i],
+          # prepare data for computing Rstar
+          y.data_mc <- list(y = samples.y[, mc_i],
+                            RSS_X = samples.res$samples.RSS_X[mc_i],
+                            RSS_XXk = samples.res$samples.RSS_XXk[mc_i],
+                            df_X = samples.res$df_X,
+                            df_XXk = samples.res$df_XXk)
+          Rstar.pack <- list(X.pack = X.pack, y.data = y.data_mc,
                             statistic = statistic,
-                            sigmahat_XXk_res = sigmahat_XXk_res[mc_i],
                             Rstar_max_try = Rstar_max_try,
                             Rstar_calc_max_step = Rstar_calc_max_step)
         } else{
@@ -327,7 +337,7 @@ cknockoff <- function(X, y,
 
         # record the raw result
         mc_used <- mc_used + 1
-        Ej_mc[mc_used] <- fj_result$fj * sample_weights[mc_i]
+        Ej_mc[mc_used] <- fj_result$fj * samples.weight[mc_i]
 
         # record the adjusted Ej_samples based on coupling
         if(!sample_coupling){
@@ -365,18 +375,19 @@ cknockoff <- function(X, y,
 
       # post-hoc Rstar refinement, for those not rejected only
       if(Rstar_refine && !decision$reject && mc_round == 1){
+        # prepare data for computing Rstar
         Rstar.pack <- list(X.pack = X.pack,
-                          statistic = statistic,
-                          Rstar_max_try = Rstar_max_try,
-                          Rstar_calc_max_step = Rstar_calc_max_step)
+                           statistic = statistic,
+                           Rstar_max_try = Rstar_max_try,
+                           Rstar_calc_max_step = Rstar_calc_max_step)
 
-        refined_result <- post_refine_Rstar(sample_res, record_mc,
-                                           mc_used, n_Ej_samples,
-                                           Ej_mc, Ej_samples,
-                                           Ej_bounds, sample_coupling,
-                                           decision, j,
-                                           Rstar.pack,
-                                           alpha, rej_alpha)
+        refined_result <- post_refine_Rstar(samples.res, record_mc,
+                                            mc_used, n_Ej_samples,
+                                            Ej_mc, Ej_samples,
+                                            Ej_bounds, sample_coupling,
+                                            decision, j,
+                                            Rstar.pack,
+                                            alpha, rej_alpha)
 
         decision <- refined_result$decision
         calc_Rstar_online <- refined_result$calc_Rstar_online
@@ -432,20 +443,22 @@ cknockoff <- function(X, y,
   }
 
   record <- list(iteration = ifelse(is.null(record), 1, record$iteration+1),
+                 X.pack = X.pack,
+                 y.pack = y.pack,
                  statistic = statistic,
                  alpha = alpha,
                  n_cores = n_cores,
                  kn.selected = kn_selected,
                  checked_so_far = checked_so_far,
                  next_check_num = min(p - length(checked_so_far), max(5, length(candidates))),
-                 Rstar_refine = Rstar_refine,
-                 X.pack = X.pack)
+                 Rstar_refine = Rstar_refine)
 
   # prepare the result
   result <- structure(list(call = match.call(),
-                           X = X,
-                           Xk = X.pack$X_kn,
-                           y = y,
+                           X = X.pack$X.org,
+                           Xk = X.pack$X_kn.org,
+                           y = y.pack$y.data$y.org,
+                           intercept = intercept,
                            kn.statistic = kn_stats_obs,
                            selected = selected,
                            sign_predict = sign_predict,
@@ -462,42 +475,46 @@ cknockoff <- function(X, y,
 
 # Replace some R^kn by R^* to do cKnockoff* after computing the f_j for cKnockoff,
 # see Appendix of the cKnockoff paper for details
-post_refine_Rstar <- function(sample_res, record_mc,
-                             mc_used, n_Ej_samples,
-                             Ej_mc, Ej_samples,
-                             Ej_bounds, sample_coupling,
-                             decision, j,
-                             Rstar.pack,
-                             alpha, rej_alpha){
+post_refine_Rstar <- function(samples.res, record_mc,
+                              mc_used, n_Ej_samples,
+                              Ej_mc, Ej_samples,
+                              Ej_bounds, sample_coupling,
+                              decision, j,
+                              Rstar.pack,
+                              alpha, rej_alpha){
 
   # make code shorter
   record_mc$DPj <- record_mc$DPj[1:mc_used]
   record_mc$bj <- record_mc$bj[1:mc_used]
-  sample_weights <- sample_res$sample_weights[1:mc_used]
+  samples.weight <- samples.res$samples.weight[1:mc_used]
   # locate the samples with DP_j = 1, where Rstar refinement is needed
   Rstar_index <- which(abs(record_mc$DPj - 1) < 1e-10)
 
   if(length(Rstar_index) > 0 && length(Rstar_index) < mc_used){
     # how large should Rstar be to make j rejected by cKnockoff
-    Rstar_to_rej_j <- calc_Rstar_to_rej_j(sample_weights, record_mc, Rstar_index)
+    Rstar_to_rej_j <- calc_Rstar_to_rej_j(samples.weight, record_mc, Rstar_index)
 
     if(Rstar_to_rej_j <= Rstar.pack$Rstar_max_try){ # if it is within the budget
       Rstar_vec <- NULL # record the realized refined Rstar
 
       for(mc_i in Rstar_index){
+        y.data_mc <- list(y = samples.res$samples.y[, mc_i],
+                          RSS_X = samples.res$samples.RSS_X[mc_i],
+                          RSS_XXk = samples.res$samples.RSS_XXk[mc_i],
+                          df_X = samples.res$df_X,
+                          df_XXk = samples.res$df_XXk)
         # compute Rstar
         Rstar <- cknockoff_Rstar(Rstar.pack$X.pack,
-                               sample_res$y_samples[, mc_i],
-                               j_exclude = j,
-                               kn_stats_obs = record_mc$kn_stat[, mc_i],
-                               sigmahat_XXk_res = sample_res$sigmahat_XXk_res[mc_i],
-                               statistic = Rstar.pack$statistic,
-                               alpha = alpha,
-                               Rstar_max_try = Rstar.pack$Rstar_max_try,
-                               Rstar_calc_max_step = Rstar.pack$Rstar_calc_max_step)$Rstar
+                                 y.data_mc,
+                                 j_exclude = j,
+                                 kn_stats_obs = record_mc$kn_stat[, mc_i],
+                                 statistic = Rstar.pack$statistic,
+                                 alpha = alpha,
+                                 Rstar_max_try = Rstar.pack$Rstar_max_try,
+                                 Rstar_calc_max_step = Rstar.pack$Rstar_calc_max_step)$Rstar
 
         # update the record for Ej
-        Ej_mc[mc_i] <- (1/Rstar - record_mc$bj[mc_i]) * sample_weights[mc_i]
+        Ej_mc[mc_i] <- (1/Rstar - record_mc$bj[mc_i]) * samples.weight[mc_i]
         # update the record for Ej_samples
         if(!sample_coupling){
           i_Ej_samples <- mc_i
@@ -539,39 +556,41 @@ post_refine_Rstar <- function(sample_res, record_mc,
 }
 
 # estimate the smallest number of R^* to make j rejected
-calc_Rstar_to_rej_j <- function(sample_weights, record_mc, Rstar_index){
+calc_Rstar_to_rej_j <- function(samples.weight, record_mc, Rstar_index){
   # the values in fj that Rstar refinement cannot change
-  other_value <- sum(record_mc$DPj[-Rstar_index] * sample_weights[-Rstar_index]) - sum(record_mc$bj * sample_weights)
+  other_value <- sum(record_mc$DPj[-Rstar_index] * samples.weight[-Rstar_index]) - sum(record_mc$bj * samples.weight)
   if(other_value >= 0){ # if fj > 0 even when Rstar = Inf
     Rstar_to_rej <- Inf
   } else{  # compute the Rstar needed to turn fj < 0
-    Rstar_to_rej <- 1/(-other_value / sum(sample_weights[Rstar_index]))
+    Rstar_to_rej <- 1/(-other_value / sum(samples.weight[Rstar_index]))
   }
 
   return(Rstar_to_rej)
 }
 
 # compute R^* efficiently
-cknockoff_Rstar <- function(X.pack, y, j_exclude,
-                           kn_stats_obs,
-                           sigmahat_XXk_res,
-                           statistic,
-                           alpha,
-                           Rstar_max_try,
-                           Rstar_calc_max_step){
-  n <- length(y)
-  p <- length(kn_stats_obs)
-  df <- n - p
+cknockoff_Rstar <- function(X.pack, y.data, j_exclude,
+                            kn_stats_obs,
+                            statistic,
+                            alpha,
+                            Rstar_max_try,
+                            Rstar_calc_max_step){
+  y <- y.data$y
+
+  n <- NROW(X.pack$X)
+  p <- NCOL(X.pack$X)
+  df_X <- y.data$df_X
 
   # p-values for screening
-  tvals_obs <- y_to_t(y, X.pack$vj_mat, sigmahat_XXk_res)
-  pvals_obs <- pvals_t(tvals_obs, df, side = "two")
+  tvals_obs <- y_to_t(y, X.pack$vj_mat, sqrt(y.data$RSS_X / df_X))
+  pvals_obs <- pvals_t(tvals_obs, df_X, side = "two")
   # screening
   candidates <- cKn_candidates(kn_stats_obs, pvals_obs, alpha,
                                record = NULL, selected = NULL)
   # only keep the hypos with very small p-values
-  candidates <- intersect(candidates, which(pvals_obs <= min(alpha / p,
-                                                             0.01 * (alpha / (ceiling(1/alpha - 1))) )))
+  candidates <- intersect(candidates,
+                          which(pvals_obs <=
+                                  min(alpha / p, 0.01 * (alpha / (ceiling(1/alpha - 1))) )))
   # exclude j as j must be in the Rstar
   candidates <- setdiff(candidates, j_exclude)
   # order the candidates by how promising they are
@@ -586,15 +605,16 @@ cknockoff_Rstar <- function(X.pack, y, j_exclude,
   else return(list(selected = NULL, Rstar = 1))
 
   # prepare data
-  y.pack <- process_y(X.pack, y)
+  y.pack <- process_y(X.pack, y.data)
 
   for(j in candidates){
-    sigma_est <- sqrt(y.pack$y_Pi_Xnoj_res_norm2[j] / (n-p+1)) # overestimate sigma
+    sigma_est <- sqrt(y.pack$RSS_Xnoj[j] / (y.pack$y.data$df_X+1)) # overestimate sigma
     fit_on_rest <- glmnet::glmnet(X.pack$X[, -j], y,
                                   lambda = 2 * sigma_est / n,
                                   intercept=T, standardize=F, standardize.response=F,
                                   family="gaussian")
-    y.pack$Xy_bias[j] <- t(X.pack$X[, j]) %*% (X.pack$X[, -j] %*% fit_on_rest$beta + rep(fit_on_rest$a0, each = n))
+    y.pack$Xy_bias[j] <- t(X.pack$X[, j]) %*% (X.pack$X[, -j] %*% fit_on_rest$beta +
+                                                 rep(fit_on_rest$a0, each = n))
   }
   cali_stats_obs <- abs(c(matrix(y, nrow = 1) %*% X.pack$X) - y.pack$Xy_bias)
 
@@ -605,8 +625,8 @@ cknockoff_Rstar <- function(X.pack, y, j_exclude,
 
     if(is.null(cali_rej_set$left)) return(j)
 
-    cali_rej_lb <- pt(cali_rej_set$left, df = df, lower.tail = T)
-    cali_rej_ub <- pt(cali_rej_set$right, df = df, lower.tail = T)
+    cali_rej_lb <- pt(cali_rej_set$left, df = df_X, lower.tail = T)
+    cali_rej_ub <- pt(cali_rej_set$right, df = df_X, lower.tail = T)
     cali_rej_mass <- sum(cali_rej_ub - cali_rej_lb)
 
     # if cali_rej_set too large, don't reject j
@@ -627,7 +647,7 @@ cknockoff_Rstar <- function(X.pack, y, j_exclude,
     # step size in the numerical integration, which expects to reject j at one try
     step_size <- cali_rej_mass / (alpha / (ceiling(1/alpha - 1))) * 1.5
     # convert the t stat value to a one-sided p-value (so Lebesgue measure)
-    pval_left_start <- pt(tval_start, df = df, lower.tail = TRUE)
+    pval_left_start <- pt(tval_start, df = df_X, lower.tail = TRUE)
 
     # the DP_j and b_j value in the numerical integration up to now
     DP_j_accumulate <- cali_rej_mass
@@ -636,20 +656,23 @@ cknockoff_Rstar <- function(X.pack, y, j_exclude,
     # move grid point forward
     pval_left_nodes <- pval_left_start + direction * (1:Rstar_calc_max_step) * step_size
     # convert the p-value point to a y sample
-    tval_nodes <- qt(pval_left_nodes, df = df, lower.tail = TRUE)
-    vjy_nodes <- tj_to_vjy(tval_nodes, y.pack$y_Pi_Xnoj_res_norm2, df)
+    tval_nodes <- qt(pval_left_nodes, df = df_X, lower.tail = TRUE)
+    vjy_nodes <- tj_to_vjy(tval_nodes, y.pack$RSS_Xnoj, df_X)
+
     y_results <- vjy_to_y(vjy_nodes, j, y.pack, X.pack)
+    y_nodes <- y_results$y
+    sigmahat.XXk_res <- sqrt(y_results$RSS_XXk / y_results$df_XXk)
 
     # at each grid point, compute fj
     for(mc_i in 1:Rstar_calc_max_step){
       if("sigma_tilde" %in% names(formals(statistic))){
-        kn_stat_mc <- statistic(X.pack$X, X.pack$X_kn, y_results$y_samples[, mc_i],
-                                sigma_tilde = y_results$sigmahat_XXk_res[mc_i])
+        kn_stat_mc <- statistic(X.pack$X, X.pack$X_kn, y_nodes[, mc_i],
+                                sigma_tilde = sigmahat.XXk_res[mc_i])
       } else{
-        kn_stat_mc <- statistic(X.pack$X, X.pack$X_kn, y_results$y_samples[, mc_i])
+        kn_stat_mc <- statistic(X.pack$X, X.pack$X_kn, y_nodes[, mc_i])
       }
 
-      cali_stat_mc <- abs(sum(X.pack$X[, j] * y_results$y_samples[, mc_i]) - y.pack$Xy_bias[j])
+      cali_stat_mc <- abs(sum(X.pack$X[, j] * y_nodes[, mc_i]) - y.pack$Xy_bias[j])
 
       # compute fj without further Rstar refinement
       fj_result <- calc_fj(j,
@@ -684,7 +707,7 @@ calc_fj <- function(j,
   ## compute b_j term
   # make rejection and fdp estimation based on knockoff statistics
   eskn_result <- kn.select(kn_stat_mc, alpha,
-                         selective = T, early_stop = T)
+                           selective = T, early_stop = T)
   eskn_selected_mc <- eskn_result$selected
 
   # compute b_j
@@ -706,14 +729,13 @@ calc_fj <- function(j,
   if(!is.na(Rstar.pack) && length(union(selected_mc, j)) == 1 &&
      (j %in% union(kn_selected_mc, cali_selected_mc))){
     Rstar_recursive <- cknockoff_Rstar(X.pack = Rstar.pack$X.pack,
-                                     y = Rstar.pack$y_mc,
-                                     j_exclude = j,
-                                     kn_stats_obs = kn_stat_mc,
-                                     sigmahat_XXk_res = Rstar.pack$sigmahat_XXk_res,
-                                     statistic = Rstar.pack$statistic,
-                                     alpha = alpha,
-                                     Rstar_max_try = Rstar.pack$Rstar_max_try,
-                                     Rstar_calc_max_step = Rstar.pack$Rstar_calc_max_step)$selected
+                                       y.data = Rstar.pack$y.data,
+                                       j_exclude = j,
+                                       kn_stats_obs = kn_stat_mc,
+                                       statistic = Rstar.pack$statistic,
+                                       alpha = alpha,
+                                       Rstar_max_try = Rstar.pack$Rstar_max_try,
+                                       Rstar_calc_max_step = Rstar.pack$Rstar_calc_max_step)$selected
 
     selected_mc <- union(selected_mc, Rstar_recursive)
     Rstar <- length(union(selected_mc, j))

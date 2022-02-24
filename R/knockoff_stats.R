@@ -52,7 +52,7 @@
 #' print(which(1:p %in% nonzero))
 #'
 #' result <- cknockoff(X, y,
-#'                     knockoffs = knockoff::create.fixed,
+#'                     knockoffs = ckn.create.fixed,
 #'                     statistic = stat.glmnet_coefdiff_lm,
 #'                     alpha = 0.05, n_cores = 1)
 #' print(result$selected)
@@ -75,7 +75,7 @@ stat.glmnet_coefdiff_lm <- function(X, X_k, y, sigma_tilde = NULL) {
 
   # Compute statistics
   fit <- glmnet::glmnet(X_full, y, lambda = lambda,
-                        intercept = T, standardize = F,
+                        intercept = F, standardize = F,
                         standardize.response = F, family = "gaussian")
 
   Z <- abs(c(as.matrix(fit$beta)))
@@ -146,7 +146,7 @@ stat.glmnet_coefdiff_lm <- function(X, X_k, y, sigma_tilde = NULL) {
 #' print(which(1:p %in% nonzero))
 #'
 #' result <- cknockoff(X, y,
-#'                     knockoffs = knockoff::create.fixed,
+#'                     knockoffs = ckn.create.fixed,
 #'                     statistic = stat.glmnet_lambdasmax_lm,
 #'                     alpha = 0.05, n_cores = 1)
 #' print(result$selected)
@@ -194,7 +194,7 @@ lasso_max_lambda_lm_glmnet <- function(X, y, lambda_min, nlambda = 10) {
   lambda_grid <- lambda_max * eta^(0:(nlambda-1))
 
   fit <- glmnet::glmnet(X, y, lambda = lambda_grid / n,
-                        intercept = T, standardize = F, standardize.response = F,
+                        intercept = F, standardize = F, standardize.response = F,
                         family="gaussian")
 
   first_nonzero <- function(x) match(T, abs(x) > 0) # NA if all(x==0)

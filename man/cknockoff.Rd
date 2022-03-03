@@ -7,10 +7,11 @@
 cknockoff(
   X,
   y,
-  knockoffs = knockoff::create.fixed,
+  intercept = TRUE,
+  knockoffs = ckn.create.fixed,
   statistic = stat.glmnet_coefdiff_lm,
   alpha = 0.05,
-  Rstar_refine = F,
+  Rstar_refine = FALSE,
   n_cores = 1,
   prelim_result = NULL,
   X.pack = NULL
@@ -21,12 +22,15 @@ cknockoff(
 
 \item{y}{response vector of length n.}
 
+\item{intercept}{Should intercept be fitted (default=TRUE) or set to zero
+(FALSE).}
+
 \item{knockoffs}{method used to construct the knockoff matrix for X.
 It should be a function taking a n-by-p matrix as input and returning a n-by-p
 matrix of knockoff variables.
 It is the same as the \code{knockoffs} argument in
 \code{knockoff::knockoff.filter}.
-By default, \code{knockoff::create.fixed} is used.}
+By default, \code{ckn.create.fixed} is used.}
 
 \item{statistic}{the knockoff feature statistics (W-statistics) function used
 to assess variable importance.
@@ -131,7 +135,7 @@ print(result$selected)
 # knockoff rejection
 library("knockoff")
 kn.result <- knockoff.filter(X, y,
-                             knockoffs = create.fixed,
+                             knockoffs = ckn.create.fixed,
                              statistic = stat.glmnet_coefdiff_lm,
                              # must specify this argument explicitly
                              fdr = 0.05

@@ -4,7 +4,7 @@
 \alias{process_X}
 \title{Compute and store matrices needed by cknockoff() from on X}
 \usage{
-process_X(X, knockoffs = knockoff::create.fixed)
+process_X(X, knockoffs = ckn.create.fixed, intercept)
 }
 \arguments{
 \item{X}{X n-by-p matrix of original variables.}
@@ -12,8 +12,8 @@ process_X(X, knockoffs = knockoff::create.fixed)
 \item{knockoffs}{either knockoff matrix of X or a knockoffs function that can
 generate it.
 If the knockoff matrix is supplied, both X and knockoffs should be properly
-normalized, e.g. using the returned X and Xk of the knockoff::create.fixed function.
-By default, knockoff::create.fixed is used.}
+normalized, e.g. using the returned X and Xk of the ckn.create.fixed function.
+By default, ckn.create.fixed is used.}
 }
 \value{
 An object of class "cknockoff.X.pack". This object is a list containing
@@ -32,7 +32,7 @@ beta <- 2.5 * (1:p \%in\% nonzero)
 y <- X \%*\% beta + rnorm(n)
 print(which(1:p \%in\% nonzero))
 
-X.pack <- process_X(X, knockoffs = knockoff::create.fixed)
+X.pack <- process_X(X, knockoffs = ckn.create.fixed)
 
 result <- cknockoff(X, y,
                     alpha = 0.05,

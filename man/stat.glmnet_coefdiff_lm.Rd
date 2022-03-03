@@ -61,7 +61,7 @@ y <- X \%*\% beta + rnorm(n)
 print(which(1:p \%in\% nonzero))
 
 result <- cknockoff(X, y,
-                    knockoffs = knockoff::create.fixed,
+                    knockoffs = ckn.create.fixed,
                     statistic = stat.glmnet_coefdiff_lm,
                     alpha = 0.05, n_cores = 1)
 print(result$selected)

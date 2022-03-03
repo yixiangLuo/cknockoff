@@ -73,7 +73,7 @@ create.fixed.MRC <- function(X,
   Xk <- matrix(Xk, nrow = n)
   # Xk <- scale(Xk, center = FALSE, scale = sqrt(colSums(Xk^2)))
 
-  return(list(X = X, Xk = Xk))
+  return(structure(list(X = X, Xk = Xk), class='knockoff.variables'))
 }
 # @examples
 # p <- 100; n <- 300; k <- 15
@@ -227,7 +227,8 @@ ckn.create.fixed <- function(X,
               "equi" = create_equicorrelated(X, intercept, randomize),
               "sdp"  = create_sdp(X, intercept, randomize)
   )
-  return(list(X = X, Xk = Xk))
+
+  return(structure(list(X = X, Xk = Xk), class='knockoff.variables'))
 }
 
 #' Create equicorrelated fixed-X knockoffs.

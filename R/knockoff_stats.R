@@ -228,16 +228,23 @@ estimate_sigma <- function(X, X_k, y){
   n <- NROW(X)
   p <- NCOL(X)
 
-  if(n >= 2*p + 1){
+  intercept <- (max(abs(c(colMeans(X), colMeans(X_k)))) < 1e-6)
+  if(intercept) y <- scale(y, center = T, scale = F)
+
+  if(n >= 2*p + 1 + intercept){
     QR <- qr(cbind(X, X_k))
     Q <- qr.Q(QR, complete = F)
-    sigma_tilde <- sqrt((sum(y^2) - sum((matrix(y, nrow = 1) %*% Q)^2)) / (n - 2*p))
-  } else if(n == 2*p){
+    sigma_tilde <- sqrt((sum(y^2) - sum((matrix(y, nrow = 1) %*% Q)^2)) / (n - 2*p - intercept))
+  } else if(n <= 2*p + intercept){
     QR <- qr(X)
     Q <- qr.Q(QR, complete = F)
-    sigma_tilde <- sqrt((sum(y^2) - sum((matrix(y, nrow = 1) %*% Q)^2)) / (n - p))
+    sigma_tilde <- sqrt((sum(y^2) - sum((matrix(y, nrow = 1) %*% Q)^2)) / (n - p - intercept))
   } else{
-    stop("X must have dimensions n >= 2*p.")
+    if(intercept){
+      stop("X must have dimensions n >= 2*p+1 when colMeans([X, Xk])=0 (intercept included effectively).")
+    } else{
+      stop("X must have dimensions n >= 2*p.")
+    }
   }
 
   return(sigma_tilde)

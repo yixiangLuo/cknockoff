@@ -211,8 +211,8 @@ process_X <- function(X, knockoffs = ckn.create.fixed,
   if(NCOL(X) <= 1){
     stop("X must have at least two columns.")
   }
-  if(NROW(X) <= NCOL(X)){
-    stop("X must have dimensions n > p")
+  if(NROW(X) <= (NCOL(X) + intercept)){
+    stop("X must have dimensions n > p (intercept=FALSE) or n > p+1 (intercept=TRUE)")
   }
 
   if(is.data.frame(X)){
@@ -226,6 +226,7 @@ process_X <- function(X, knockoffs = ckn.create.fixed,
 
   n <- NROW(X)
   p <- NCOL(X)
+  X.raw <- ifelse(n < 2*p+intercept, X, NA)
 
   if(is.matrix(knockoffs)){
     # when X is raw but X_kn is augmented
@@ -298,7 +299,7 @@ process_X <- function(X, knockoffs = ckn.create.fixed,
 
   X.pack.data <- list(X = X, X_kn = X_kn,
                       vj_mat = vj_mat,
-                      X.org = X.org, X_kn.org = X_kn.org,
+                      X.raw = X.raw, X.org = X.org, X_kn.org = X_kn.org,
                       XXk.org.basis = Q_XXk)
 
   X.pack <- structure(c(X.pack.data, list(X.names = X.names, X.org.nrow = n)),
@@ -317,6 +318,7 @@ transform_y <- function(X.pack, y,
   p <- NCOL(X.pack$X)
 
   # center y if necessary
+  y.raw <- y
   y <- scale(y, center = intercept, scale = F)
 
   # compute RSS and degree of freedom in y ~ X
@@ -330,7 +332,12 @@ transform_y <- function(X.pack, y,
     } else{
       y.extra <- with_seed(0, rnorm(2*p-n+intercept, sd = sqrt(RSS_X / df_X)))
     }
-    y <- c(y, y.extra)
+    fitted_intercept <- if(intercept){
+      unname(lm(y.raw ~ X.pack$X.raw + 1)$coefficients[1])
+    } else{ 0 }
+
+    y <- c(y.raw, y.extra + fitted_intercept)
+    y <- scale(y, center = intercept, scale = F)
   }
 
   # record the original y before rotation

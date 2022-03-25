@@ -11,7 +11,7 @@ invest_ineq <- function(n, p, # problem size
                         naive_sampler = T, # shoule we use the naive sampler or our actual sampler
                         sample_coupling = F, # should we couple the Monte-Carlo samples
                         kn_reg_method = "local_lin_reg", # how do we fit the |W_j| curve, alternative is "lin_interp", linear interpolation
-                        statistic = stat.glmnet_coefdiff_lm, # feature statistics
+                        statistic = stat.glmnet_coefdiff_tiebreak, # feature statistics
                         noise = quote(rnorm(n)), # noise in the linear model
                         n_cores = 10 # number of cores in parallel computing
 ){

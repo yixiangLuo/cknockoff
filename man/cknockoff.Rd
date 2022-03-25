@@ -9,7 +9,7 @@ cknockoff(
   y,
   intercept = TRUE,
   knockoffs = ckn.create.fixed,
-  statistic = stat.glmnet_coefdiff_lm,
+  statistic = stat.glmnet_coefdiff_tiebreak,
   alpha = 0.05,
   Rstar_refine = FALSE,
   n_cores = 1,
@@ -57,13 +57,13 @@ Otherwise it's computed sequentially.}
 \code{knockoff::knockoff.filter} or a \code{cknockoff.result} object returned
 by \code{cknockoff}.
 cknockoff can read the information from a knockoff result or a cknockoff
-result and make possibly more rejections with the same FDR control.
+result and make possibly more rejections while keeping the FDR control valid.
 See more details below.}
 
 \item{X.pack}{An object of class \code{cknockoff.X.pack} returned by function
 \code{process_X}.
 This is used only for simulations studies, where cknockoff is applied many
-times to the same fixed X, to accelerate computation.
+times to the same fixed \eqn{X}, to accelerate computation.
 General users should ignore it and leave it as default = NULL.
 If X.pack is provided, the argument "knockoffs" is not needed and will be
 overwritten.}
@@ -136,10 +136,8 @@ print(result$selected)
 library("knockoff")
 kn.result <- knockoff.filter(X, y,
                              knockoffs = ckn.create.fixed,
-                             statistic = stat.glmnet_coefdiff_lm,
-                             # must specify this argument explicitly
-                             fdr = 0.05
-                             # must specify this argument explicitly
+                             statistic = stat.glmnet_coefdiff_tiebreak, # must specify this argument explicitly
+                             fdr = 0.05 # must specify this argument explicitly
                              )
 print(kn.result$selected)
 

@@ -129,7 +129,7 @@ check_args <- function(args){
   }
 
   # Validate input dimensions
-  if(is.na(args$y.pack)){
+  if(all(is.na(args$y.pack))){
     y.length <- length(c(args$y))
     if(is(args$X.pack, "cknockoff.X.pack")){
       if(y.length != NROW(args$X.pack$X.org) &&
@@ -150,7 +150,7 @@ process_args <- function(args){
     args$X.pack <- process_X(args$X, knockoffs = args$knockoffs,
                              intercept = args$intercept)
   }
-  if(is.na(args$y.pack)){
+  if(all(is.na(args$y.pack))){
     y.data <- transform_y(args$X.pack, args$y,
                           intercept = args$intercept,
                           randomize = F)
@@ -178,6 +178,8 @@ process_args <- function(args){
 #' @param X X n-by-p matrix of original variables.
 #' @param knockoffs either knockoff matrix of X or a knockoffs function that can
 #' generate it.
+#' @param intercept Will intercept be fitted (default=TRUE) or set to zero
+#' (FALSE).
 #' If the knockoff matrix is supplied, both X and knockoffs should be properly
 #' normalized, e.g. using the returned X and Xk of the ckn.create.fixed function.
 #' By default, ckn.create.fixed is used.
@@ -206,7 +208,7 @@ process_args <- function(args){
 #'
 #' @export
 process_X <- function(X, knockoffs = ckn.create.fixed,
-                      intercept){
+                      intercept = T){
   # validate the arguments
   if(NCOL(X) <= 1){
     stop("X must have at least two columns.")
@@ -226,7 +228,7 @@ process_X <- function(X, knockoffs = ckn.create.fixed,
 
   n <- NROW(X)
   p <- NCOL(X)
-  X.raw <- ifelse(n < 2*p+intercept, X, NA)
+  X.raw <- if(n < 2*p+intercept){X} else{NA}
 
   if(is.matrix(knockoffs)){
     # when X is raw but X_kn is augmented
@@ -312,7 +314,7 @@ process_X <- function(X, knockoffs = ckn.create.fixed,
 
 
 transform_y <- function(X.pack, y,
-                        intercept,
+                        intercept = T,
                         randomize = F){
   n <- length(y)
   p <- NCOL(X.pack$X)

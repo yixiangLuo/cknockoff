@@ -1,92 +1,4 @@
-#' Creates fixed-X knockoff variables by MRC
-#'
-#' This function is a R wrapper of the \code{knocproduce_FX_knockoffskpy}
-#' function in the Python package \code{knockpy}. It creates fixed-X knockoff
-#' variables by Minimizing Reconstructability
-#' (see \href{Spector and Janson (2021)}{https://arxiv.org/abs/2011.14625}).
-#' To use this function, Users should have the R package \code{reticulate} and
-#' the python package \code{knockpy} installed.
-#'
-#' @param X n-by-p matrix of the features.
-#' @param method Same argument as the "method" in the \code{smatrix.compute_smatrix}
-#' function in knockpy package.
-#' Take value from "mvr", "maxent", "mmi", "sdp", "equicorrelated", and "ci".
-#' The default is "mvr".
-#' @param solver Same argument as the "solver" in the \code{smatrix.compute_smatrix}
-#' function in knockpy package.
-#' Take value from "cd", "sdp", "psgd".
-#' Can be leave as \code{NULL}.
-#' @param knockpy The R object wrapping the Python module "knockpy". Users may
-#' provide their own wrapper using "reticulate::import" if "knockpy" is not
-#' installed in the default python environment
-#' (e.g. in some environments created by anaconda).
-#' @param num_processes Same argument as the "num_processes" in the
-#' \code{smatrix.compute_smatrix} function in knockpy package.
-#' Number of parallel process to use in computing the matrix approximately.
-#'
-#' @return A list containing the following components:
-#'  \item{X}{n-by-p matrix of original variables (normalized).}
-#'  \item{Xk}{n-by-p matrix of knockoff variables.}
-#'
-#' @references
-#'
-#'
-#' @export
-create.fixed.MRC <- function(X,
-                             method = c("mvr", "maxent", "mmi",
-                                        "sdp", "equicorrelated", "ci"),
-                             solver = NULL,
-                             knockpy = NULL,
-                             num_processes = 1){
 
-  if(!requireNamespace("reticulate", quietly=T)) {
-    stop("R package 'reticulate' is required for calling python package 'knockpy' but is not installed.")
-  }
-
-  method <- match.arg(method)
-  if(is.null(solver)){
-    solver <- ifelse(method == "sdp", "sdp", "cd")
-  }
-
-  if(is.null(knockpy)){
-    tryCatch({
-      knockpy <- reticulate::import("knockpy")
-    }, error = function(msg){
-      stop(msg)
-    })
-  }
-
-  n <- NROW(X)
-  p <- NCOL(X)
-
-  # augment and scale X
-  if(n < 2*p){
-    X <- rbind(X, matrix(0, 2*p-n, p))
-  }
-  X <- scale(X, center = FALSE, scale = sqrt(colSums(X^2)))
-
-  Simga_X <- t(X) %*% X
-
-  s_mat <- knockpy$smatrix$compute_smatrix(Simga_X, method = method, solver = solver,
-                                           num_processes = num_processes)
-  Xk <- knockpy$knockoffs$produce_FX_knockoffs(X, solve(Simga_X), s_mat)
-  Xk <- matrix(Xk, nrow = n)
-  # Xk <- scale(Xk, center = FALSE, scale = sqrt(colSums(Xk^2)))
-
-  return(structure(list(X = X, Xk = Xk), class='knockoff.variables'))
-}
-# @examples
-# p <- 100; n <- 300; k <- 15
-# X <- matrix(rnorm(n*p), n)
-# nonzero <- sample(p, k)
-# beta <- 2.5 * (1:p %in% nonzero)
-# y <- X %*% beta + rnorm(n)
-# print(which(1:p %in% nonzero))
-#
-# result <- cknockoff(X, y,
-#                     knockoffs = create.fixed.MRC,
-#                     alpha = 0.05, n_cores = 1)
-# print(result$selected)
 
 
 #' Select variables by knockoff.
@@ -168,7 +80,95 @@ kn_prefer <- function(j, kn_statistics, alpha, relax_factor = 1.5){
 
 
 
+#' Creates fixed-X knockoff variables by MRC
+#'
+#' This function is a R wrapper of the \code{knocproduce_FX_knockoffskpy}
+#' function in the Python package \code{knockpy}. It creates fixed-X knockoff
+#' variables by Minimizing Reconstructability
+#' (see \href{Spector and Janson (2021)}{https://arxiv.org/abs/2011.14625}).
+#' To use this function, Users should have the R package \code{reticulate} and
+#' the python package \code{knockpy} installed.
+#'
+#' @param X n-by-p matrix of the features.
+#' @param method Same argument as the "method" in the \code{smatrix.compute_smatrix}
+#' function in knockpy package.
+#' Take value from "mvr", "maxent", "mmi", "sdp", "equicorrelated", and "ci".
+#' The default is "mvr".
+#' @param solver Same argument as the "solver" in the \code{smatrix.compute_smatrix}
+#' function in knockpy package.
+#' Take value from "cd", "sdp", "psgd".
+#' Can be leave as \code{NULL}.
+#' @param knockpy The R object wrapping the Python module "knockpy". Users may
+#' provide their own wrapper using "reticulate::import" if "knockpy" is not
+#' installed in the default python environment
+#' (e.g. in some environments created by anaconda).
+#' @param num_processes Same argument as the "num_processes" in the
+#' \code{smatrix.compute_smatrix} function in knockpy package.
+#' Number of parallel process to use in computing the matrix approximately.
+#'
+#' @return A list containing the following components:
+#'  \item{X}{n-by-p matrix of original variables (normalized).}
+#'  \item{Xk}{n-by-p matrix of knockoff variables.}
+#'
+#' @references
+#'
+#'
+#' @export
+ckn.create.fixed.MRC <- function(X,
+                                 method = c("mvr", "maxent", "mmi",
+                                            "sdp", "equicorrelated", "ci"),
+                                 solver = NULL,
+                                 knockpy = NULL,
+                                 num_processes = 1){
 
+  if(!requireNamespace("reticulate", quietly=T)) {
+    stop("R package 'reticulate' is required for calling python package 'knockpy' but is not installed.")
+  }
+
+  method <- match.arg(method)
+  if(is.null(solver)){
+    solver <- ifelse(method == "sdp", "sdp", "cd")
+  }
+
+  if(is.null(knockpy)){
+    tryCatch({
+      knockpy <- reticulate::import("knockpy")
+    }, error = function(msg){
+      stop(msg)
+    })
+  }
+
+  n <- NROW(X)
+  p <- NCOL(X)
+
+  # augment and scale X
+  if(n < 2*p){
+    X <- rbind(X, matrix(0, 2*p-n, p))
+  }
+  X <- scale(X, center = FALSE, scale = sqrt(colSums(X^2)))
+
+  Simga_X <- t(X) %*% X
+
+  s_mat <- knockpy$smatrix$compute_smatrix(Simga_X, method = method, solver = solver,
+                                           num_processes = num_processes)
+  Xk <- knockpy$knockoffs$produce_FX_knockoffs(X, solve(Simga_X), s_mat)
+  Xk <- matrix(Xk, nrow = n)
+  # Xk <- scale(Xk, center = FALSE, scale = sqrt(colSums(Xk^2)))
+
+  return(structure(list(X = X, Xk = Xk), class='knockoff.variables'))
+}
+# @examples
+# p <- 100; n <- 300; k <- 15
+# X <- matrix(rnorm(n*p), n)
+# nonzero <- sample(p, k)
+# beta <- 2.5 * (1:p %in% nonzero)
+# y <- X %*% beta + rnorm(n)
+# print(which(1:p %in% nonzero))
+#
+# result <- cknockoff(X, y,
+#                     knockoffs = ckn.create.fixed.MRC,
+#                     alpha = 0.05, n_cores = 1)
+# print(result$selected)
 
 
 ## Below are modified from the knockoff R package
@@ -178,7 +178,8 @@ kn_prefer <- function(j, kn_statistics, alpha, relax_factor = 1.5){
 #' Creates fixed-X knockoff variables.
 #'
 #' @param X normalized n-by-p matrix of original variables.(\eqn{n \geq p}).
-#' @param intercept
+#' @param intercept Will the intercept be fitted (TRUE) or set to zero
+#' (default=FALSE).
 #' @param method either "equi" or "sdp" (default: "sdp").
 #' This determines the method that will be used to minimize the correlation between the original variables and the knockoffs.
 #' @param randomize whether the knockoffs are constructed deterministically or randomized (default: F).
@@ -203,7 +204,7 @@ kn_prefer <- function(j, kn_statistics, alpha, relax_factor = 1.5){
 #'
 #' @export
 ckn.create.fixed <- function(X,
-                             intercept = F,
+                             intercept = T,
                              method = c('sdp','equi'),
                              randomize = F) {
   method <- match.arg(method)
@@ -214,10 +215,13 @@ ckn.create.fixed <- function(X,
   # Validate dimensions
   n <- NROW(X)
   p <- NCOL(X)
-  if (n <= p)
-    stop('Input X must have dimensions n > p')
+  if (n <= p+intercept)
+    stop(paste0('Input X must have dimensions n > p',
+                ifelse(intercept, "+1. ", ". ")))
   else if (n < 2*p+intercept) {
-    warning(paste0('Input X has dimensions p < n < 2p',
+    warning(paste0('Input X has dimensions p',
+                   ifelse(intercept, "+1. ", ". "),
+                   ' < n < 2p',
                    ifelse(intercept, "+1. ", ". ")),
             'Augmenting the model with extra rows.', immediate.=T)
     X <- rbind(X, matrix(0, 2*p+intercept-n, p))

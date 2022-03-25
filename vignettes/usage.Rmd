@@ -1,0 +1,162 @@
+---
+title: "Usage of the cknockoff procedure"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Usage of the cknockoff procedure}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\usepackage[utf8]{inputenc}
+---
+
+
+This vignette illustrates the usage of the `cknockoff` package for multiple testing under the Gaussian linear model. Some parts of the vignette are modified from the [vignette](https://cran.r-project.org/web/packages/knockoff/vignettes/knockoff.html) in the `knockoff` package.
+
+For simplicity, we will use synthetic data constructed from a linear model such that the response only depends on a small fraction of the variables.
+
+
+```{r, results='hide', message=FALSE, warning=FALSE}
+set.seed(2022)
+```
+
+```{r define-problem}
+# Problem parameters
+n <- 1000          # number of observations
+p <- 200           # number of variables
+k <- 20            # number of variables with nonzero coefficients
+amplitude <- 3.5   # signal amplitude (for noise level = 1)
+
+# Generate the variables from a multivariate normal distribution
+mu <- rep(0,p)
+rho <- 0.25
+Sigma <- toeplitz(rho^(0:(p-1)))
+X <- matrix(rnorm(n*p),n) %*% chol(Sigma)
+
+# Generate the response from a linear model
+nonzero <- sample(p, k)
+beta <- amplitude * (1:p %in% nonzero) / sqrt(n)
+y.sample <- function(X) X %*% beta + rnorm(n)
+y <- y.sample(X)
+```
+
+First examples
+--------------
+
+To begin, we call `cknockoff` with the default settings.
+```{r knock-default, results='hide', message=F, warning=F}
+library(cknockoff)
+result <- cknockoff(X, y, alpha = 0.05)
+```
+We can display the results with
+```{r print-result}
+print(result)
+```
+The default value for the target false discovery rate is 0.05. In this experiment the false discovery proportion is
+```{r define-fdp}
+fdp <- function(selected) sum(beta[selected] == 0) / max(1, length(selected))
+fdp(result$selected)
+```
+And the true positive rate is
+```{r define-tpp}
+tpp <- function(selected) sum(beta[selected] != 0) / max(1, sum(beta != 0))
+tpp(result$selected)
+```
+
+
+More advanced usages
+--------------
+
+We can run `cknockoff` on a knockoff or a cknockoff result object and make possible improvement over it. The FDR control will be still valid.
+``` {r improve-kn-1}
+# knockoff rejection
+library("knockoff")
+kn.result <- knockoff.filter(X, y,
+                             knockoffs = ckn.create.fixed,
+                             statistic = stat.glmnet_coefdiff_tiebreak, # must specify this argument explicitly. Do not rely on the default value.
+                             fdr = 0.05 # must specify this argument explicitly. Do not rely on the default value.
+                             )
+print(kn.result)
+```
+
+Improve the obtained knockoff result:
+``` {r improve-kn-2}
+ckn.result <- cknockoff(prelim_result = kn.result)
+print(ckn.result)
+```
+
+Improve the previous cknockoff result:
+``` {r improve-kn-3}
+ckn.result <- cknockoff(prelim_result = ckn.result)
+print(ckn.result)
+
+```
+
+We can use the cknockoff$^*$ procedure by setting the argument `Rstar_refine = TRUE`. 
+``` {r ckn-star-1}
+# basic usage
+ckn_star.result <- cknockoff(X, y, alpha = 0.05, Rstar_refine = T)
+print(ckn_star.result)
+
+print(paste0("FDP: ", fdp(ckn_star.result$selected), ", TPP: ", tpp(ckn_star.result$selected)))
+```
+
+<!-- Can use cknockoff$^*$ to improve a cknockoff result object: -->
+<!-- ``` {r ckn-star-2} -->
+<!-- ckn_star.result <- cknockoff(prelim_result = ckn.result, Rstar_refine = T) -->
+<!-- print(ckn_star.result) -->
+<!-- ``` -->
+
+<!-- To accelerate calculation by parallel computing, set the argument `n_cores` as the number of threads available for parallel computing. -->
+<!-- ``` {r parallel} -->
+<!-- result <- cknockoff(X, y, alpha = 0.05, n_cores = 2) -->
+<!-- print(result) -->
+<!-- ``` -->
+
+
+User-defined function arguments as in knockoff
+--------------
+
+The function arguments `knockoffs` and `statistic` may adopt other choices and can be defined by the users in the same way as in the `knockoff` package. 
+
+## knockoff generation functions
+
+By default, the cknockoff procedure sets `knockoffs = ckn.create.fixed`, which generates the knockoff matrix based on the `create.fixed` function in the `knockoff` package for the fixed-X setting. This is the canonical choice for fixed-X knockoffs.
+
+Another choice is to set `knockoffs = ckn.create.fixed.MRC`, which warp the [python package](https://amspector100.github.io/knockpy/) for creating the knockoffs by [minimizing reconstructability](https://arxiv.org/abs/2011.14625). The availability of this option relies on a properly installed [knockpy package](https://amspector100.github.io/knockpy/).
+
+As in the [knockoff package](https://cran.r-project.org/web/packages/knockoff/vignettes/knockoff.html), user can define their own functions for the `knockoffs` argument. For example, we can use the equi-correlated knockoffs by
+```{r knock-equi}
+eq_knockoffs <- function(X, intercept) ckn.create.fixed(X, intercept, method = 'equi')
+result <- cknockoff(X, y, knockoffs = eq_knockoffs)
+print(result)
+
+print(paste0("FDP: ", fdp(result$selected), ", TPP: ", tpp(result$selected)))
+```
+
+## test statistics
+
+By default, the cknockoff procedure uses a test statistic based on the lasso. Specifically, it uses the statistic `stat.glmnet_coefdiff_tiebreak`, which essentially computes
+$$
+W_j = |Z_j| - |\tilde{Z}_j|
+$$
+where $Z_j$ and $\tilde{Z}_j$ are the lasso coefficient estimates for the 
+jth variable and its knockoff, respectively. The value of the regularization
+parameter $\lambda$ is set as $2$ times the estimated standard deviation of the Gaussian noise.
+
+Another built-in statistics, `stat.glmnet_lambdasmax_coarse`, is available. This is essentially the same as, but much faster than, the canonical `stat.glmnet_lambdasmax` feature statistics for the fixed-X setting in the `knockoff` package.
+
+In addition to using the predefined test statistics, it is also possible to use your own custom test statistics. To illustrate this functionality, we implement one of the simplest test statistics from the original knockoff filter paper, namely
+$$
+W_j = \left|X_j^\top \cdot y\right| - \left|\tilde{X}_j^\top \cdot y\right|.
+$$
+
+```{r custom-stat, warning=FALSE}
+my_knockoff_stat <- function(X, X_k, y) {
+  abs(t(X) %*% y) - abs(t(X_k) %*% y)
+}
+result <- cknockoff(X, y, statistic = my_knockoff_stat)
+print(result)
+
+print(paste0("FDP: ", fdp(result$selected), ", TPP: ", tpp(result$selected)))
+```
+
+Users should be careful in defining their own `statistic` functions. Since this function will be called recursively in `cknockoff`, a computationally inefficient `statistic` function would make the whole cknockoff procedure pretty slow. We suggest using the built-in statistic functions.

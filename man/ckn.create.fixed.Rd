@@ -4,10 +4,13 @@
 \alias{ckn.create.fixed}
 \title{Fixed-X knockoffs}
 \usage{
-ckn.create.fixed(X, intercept = F, method = c("sdp", "equi"), randomize = F)
+ckn.create.fixed(X, intercept = T, method = c("sdp", "equi"), randomize = F)
 }
 \arguments{
 \item{X}{normalized n-by-p matrix of original variables.(\eqn{n \geq p}).}
+
+\item{intercept}{Will the intercept be fitted (TRUE) or set to zero
+(default=FALSE).}
 
 \item{method}{either "equi" or "sdp" (default: "sdp").
 This determines the method that will be used to minimize the correlation between the original variables and the knockoffs.}

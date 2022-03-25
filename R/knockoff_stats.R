@@ -53,12 +53,12 @@
 #'
 #' result <- cknockoff(X, y,
 #'                     knockoffs = ckn.create.fixed,
-#'                     statistic = stat.glmnet_coefdiff_lm,
+#'                     statistic = stat.glmnet_coefdiff_tiebreak,
 #'                     alpha = 0.05, n_cores = 1)
 #' print(result$selected)
 #'
 #' @export
-stat.glmnet_coefdiff_lm <- function(X, X_k, y, sigma_tilde = NULL) {
+stat.glmnet_coefdiff_tiebreak <- function(X, X_k, y, sigma_tilde = NULL) {
   n <- NROW(X)
   p <- NCOL(X)
   orig <- 1:p
@@ -147,14 +147,14 @@ stat.glmnet_coefdiff_lm <- function(X, X_k, y, sigma_tilde = NULL) {
 #'
 #' result <- cknockoff(X, y,
 #'                     knockoffs = ckn.create.fixed,
-#'                     statistic = stat.glmnet_lambdasmax_lm,
+#'                     statistic = stat.glmnet_lambdasmax_coarse,
 #'                     alpha = 0.05, n_cores = 1)
 #' print(result$selected)
 #'
 #' @export
-stat.glmnet_lambdasmax_lm <- function(X, X_k, y,
-                                      sigma_tilde = NULL,
-                                      nlambda = 10) {
+stat.glmnet_lambdasmax_coarse <- function(X, X_k, y,
+                                          sigma_tilde = NULL,
+                                          nlambda = 10) {
   n <- NROW(X)
   p <- NCOL(X)
   orig <- 1:p

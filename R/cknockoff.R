@@ -39,13 +39,13 @@ NULL
 #' \code{knockoff::knockoff.filter} or a \code{cknockoff.result} object returned
 #' by \code{cknockoff}.
 #' cknockoff can read the information from a knockoff result or a cknockoff
-#' result and make possibly more rejections with the same FDR control.
+#' result and make possibly more rejections while keeping the FDR control valid.
 #' See more details below.
 #'
 #' @param X.pack An object of class \code{cknockoff.X.pack} returned by function
 #' \code{process_X}.
 #' This is used only for simulations studies, where cknockoff is applied many
-#' times to the same fixed X, to accelerate computation.
+#' times to the same fixed \eqn{X}, to accelerate computation.
 #' General users should ignore it and leave it as default = NULL.
 #' If X.pack is provided, the argument "knockoffs" is not needed and will be
 #' overwritten.
@@ -115,10 +115,8 @@ NULL
 #' library("knockoff")
 #' kn.result <- knockoff.filter(X, y,
 #'                              knockoffs = ckn.create.fixed,
-#'                              statistic = stat.glmnet_coefdiff_lm,
-#'                              # must specify this argument explicitly
-#'                              fdr = 0.05
-#'                              # must specify this argument explicitly
+#'                              statistic = stat.glmnet_coefdiff_tiebreak, # must specify this argument explicitly
+#'                              fdr = 0.05 # must specify this argument explicitly
 #'                              )
 #' print(kn.result$selected)
 #'
@@ -138,24 +136,22 @@ NULL
 cknockoff <- function(X, y,
                       intercept = TRUE,
                       knockoffs = ckn.create.fixed,
-                      statistic = stat.glmnet_coefdiff_lm,
+                      statistic = stat.glmnet_coefdiff_tiebreak,
                       alpha = 0.05,
                       Rstar_refine = FALSE,
                       n_cores = 1,
                       prelim_result = NULL,
                       X.pack = NULL){
 
+  # 5 rounds of Monte-Carlo sampling in computing E_j, each round 100 samples
   mc_rounds <- 5
-  mc_size <- 100  # must be even as paring samples is employed
+  mc_size <- 100
 
+  # constrain the computational burden in calculating R^*
   Rstar_max_try <- 3
   Rstar_calc_max_step <- 3
 
-  # knockoff.type <- match.arg(knockoff.type)
-
-  # cknockoff.call <- match.call.defaults()
-  # cknockoff.call[[1]] <- as.symbol("parse_args")
-  # args <- eval(cknockoff.call)
+  # process arguments
   envir <- parent.frame()
   args <- parse_args(X, y, intercept,
                      knockoffs, statistic,
@@ -164,7 +160,7 @@ cknockoff <- function(X, y,
                      prelim_result, X.pack,
                      envir = envir)
 
-  check_args(args)
+  check_args(args)  # validate arguments
 
   args <- process_args(args)
   X.pack <- args$X.pack
@@ -422,7 +418,7 @@ cknockoff <- function(X, y,
   }
 
   # resemble the selection set
-  selected <- union(selected, unlist(cali_selected))
+  selected <- sort(union(selected, unlist(cali_selected)))
   if(!is.null(X.pack$X.names))
     names(selected) <- X.pack$X.names[selected]
 
@@ -657,7 +653,8 @@ cknockoff_Rstar <- function(X.pack, y.data, j_exclude,
     pval_left_nodes <- pval_left_start + direction * (1:Rstar_calc_max_step) * step_size
     # convert the p-value point to a y sample
     tval_nodes <- qt(pval_left_nodes, df = df_X, lower.tail = TRUE)
-    vjy_nodes <- tj_to_vjy(tval_nodes, y.pack$RSS_Xnoj, df_X)
+    vjy_nodes <- tj_to_vjy(tval_nodes, y.pack$RSS_Xnoj[j], df_X)
+
 
     y_results <- vjy_to_y(vjy_nodes, j, y.pack, X.pack)
     y_nodes <- y_results$y
@@ -752,8 +749,23 @@ calc_fj <- function(j,
   return(list(fj = fj, DP_j = DP_j, b_j = b_j, Rstar = Rstar))
 }
 
+# The following function is modified from the knockoff package
 
-
+#' Print results of cknockoff
+#'
+#' Prints the list of variables selected by cknockoff and the corresponding function call.
+#'
+#' @param x the output of a call to cknockoff
+#' @param ... unused
+#'
+#' @method print cknockoff.result
+#' @export
+print.cknockoff.result <- function(x, ...) {
+  cat('Call:\n')
+  print(x$call)
+  cat('\nSelected variables:\n')
+  print(x$selected)
+}
 
 
 

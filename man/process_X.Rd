@@ -4,13 +4,16 @@
 \alias{process_X}
 \title{Compute and store matrices needed by cknockoff() from on X}
 \usage{
-process_X(X, knockoffs = ckn.create.fixed, intercept)
+process_X(X, knockoffs = ckn.create.fixed, intercept = T)
 }
 \arguments{
 \item{X}{X n-by-p matrix of original variables.}
 
 \item{knockoffs}{either knockoff matrix of X or a knockoffs function that can
-generate it.
+generate it.}
+
+\item{intercept}{Will intercept be fitted (default=TRUE) or set to zero
+(FALSE).
 If the knockoff matrix is supplied, both X and knockoffs should be properly
 normalized, e.g. using the returned X and Xk of the ckn.create.fixed function.
 By default, ckn.create.fixed is used.}

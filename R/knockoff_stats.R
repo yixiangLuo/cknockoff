@@ -202,7 +202,7 @@ lasso_max_lambda_lm_glmnet <- function(X, y, lambda_min, nlambda = 10) {
   names(time_of_entry) <- NULL
   time_of_entry[is.na(time_of_entry)] <- nlambda + 1
 
-  y_res <- y - (X %*% fit$beta + rep(fit$a0, each = n))
+  y_res <- as.matrix(y - (X %*% fit$beta + rep(fit$a0, each = n)))
   tie_breaker <- sapply(1:p, function(j){
     if(time_of_entry[j] > 1){
       return(abs(t(X[, j]) %*% y_res[, time_of_entry[j]-1]))

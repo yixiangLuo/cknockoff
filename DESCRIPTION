@@ -1,7 +1,7 @@
 Package: cknockoff
 Title: The cKnockoff Filter for FDR-controlled Variable Selection
-Version: 0.0.0.9000
-Date: 2022-01-13
+Version: 1.0.0.0
+Date: 2022-06-27
 Authors@R: 
     c(person("Yixiang", "Luo", role = c("aut", "cre"),
              email="yixiangluo@berkeley.edu"),

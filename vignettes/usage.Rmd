@@ -68,7 +68,7 @@ More advanced usages
 We can run `cknockoff` on a knockoff or a cknockoff result object and make possible improvement over it. The FDR control will be still valid.
 ``` {r improve-kn-1}
 # knockoff rejection
-library("knockoff")
+library(knockoff)
 kn.result <- knockoff.filter(X, y,
                              knockoffs = ckn.create.fixed,
                              statistic = stat.glmnet_coefdiff_tiebreak, # must specify this argument explicitly. Do not rely on the default value.

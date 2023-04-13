@@ -284,7 +284,9 @@ create_sdp <- function(X, intercept, randomize) {
   s[s <= tol] = 0
 
   # Construct the knockoff according to Equation 1.4:
-  C.svd = knockoff:::canonical_svd(2*diag(s) - (s %diag*% G_inv %*diag% s))
+  CC <- 2*diag(s) - (s %diag*% G_inv %*diag% s)
+  CC[abs(CC) <= tol] = 0
+  C.svd = canonical_svd(CC)
   X_ko = X - (X %*% G_inv %*diag% s) +
     (X.svd$u_perp %*diag% sqrt(pmax(0, C.svd$d))) %*% t(C.svd$v)
 }
@@ -298,7 +300,7 @@ decompose <- function(X, intercept, randomize) {
   n = nrow(X); p = ncol(X)
   stopifnot(n >= 2*p+intercept)
 
-  result = knockoff:::canonical_svd(X)
+  result = canonical_svd(X)
   X_basis <- if(intercept){
     cbind(result$u, rep(1, n))
   } else{ result$u }
@@ -310,6 +312,29 @@ decompose <- function(X, intercept, randomize) {
   }
   result$u_perp = u_perp
   result
+}
+
+# Reduced SVD with canonical sign choice.
+#
+# Our convention is that the sign of each vector in U is chosen such that the
+# coefficient with the largest absolute value is positive.
+#' @keywords internal
+canonical_svd = function(X) {
+  X.svd = tryCatch({
+    svd(X)
+  }, warning = function(w){}, error = function(e) {
+    stop(paste0("SVD failed in the creation of fixed-design knockoffs. ",
+                "Error message: ", e))
+  }, finally = {})
+
+  for (j in 1:min(dim(X))) {
+    i = which.max(abs(X.svd$u[,j]))
+    if (X.svd$u[i,j] < 0) {
+      X.svd$u[,j] = -X.svd$u[,j]
+      X.svd$v[,j] = -X.svd$v[,j]
+    }
+  }
+  return(X.svd)
 }
 
 

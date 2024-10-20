@@ -236,10 +236,11 @@ cknockoff <- function(X, y,
   cali_stats_obs <- abs(c(matrix(y, nrow = 1) %*% X) - y.pack$Xy_bias)
 
   # the confidence sequence alpha for controlling Monte-Carlo error
-  rej_alpha <- min(0.05, alpha * max(1, length(init_selected)) / length(candidates))
+  rej_alpha <- min(0.05, 0.1 * alpha * max(1, length(init_selected)) / length(candidates))
 
   # check each hypothesis in sequence/parallel
   cali_selected <- forall(j = candidates, .options.multicore = list(preschedule = F)) %exec% {
+    # temp_hE_n <- 0
 
     # prepare repeatedly used variables
     Ej_mc <- NULL  # raw record for the Ej samples
@@ -288,7 +289,7 @@ cknockoff <- function(X, y,
         }
       }
 
-      # retrive the samples
+      # retrieve the samples
       samples.y <- samples.res$samples.y
       samples.weight <- samples.res$samples.weight
       sigmahat.XXk_res <- sqrt(samples.res$samples.RSS_XXk / samples.res$df_XXk)

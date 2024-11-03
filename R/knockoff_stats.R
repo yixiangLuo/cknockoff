@@ -81,7 +81,7 @@ stat.glmnet_coefdiff_tiebreak <- function(X, X_k, y, sigma_tilde = NULL) {
   Z <- abs(c(as.matrix(fit$beta)))
   W <- Z[orig] - Z[orig+p]
 
-  y_res <- y - as.matrix(X_full %*% fit$beta) + rep(fit$a0, each = n)
+  y_res <- y - as.matrix(X_full %*% fit$beta) - rep(fit$a0, each = n)
   res_corr <- c(abs(t(y_res) %*% X_full))
   tie_breaker <- lambda * n * sign(W)
   not_in_model <- which(W == 0)
@@ -202,7 +202,7 @@ lasso_max_lambda_lm_glmnet <- function(X, y, lambda_min, nlambda = 10) {
   names(time_of_entry) <- NULL
   time_of_entry[is.na(time_of_entry)] <- nlambda + 1
 
-  y_res <- c(y) - as.matrix(X %*% fit$beta) + rep(fit$a0, each = n)
+  y_res <- c(y) - as.matrix(X %*% fit$beta) - rep(fit$a0, each = n)
   tie_breaker <- sapply(1:p, function(j){
     if(time_of_entry[j] > 1){
       return(abs(t(X[, j]) %*% y_res[, time_of_entry[j]-1]))

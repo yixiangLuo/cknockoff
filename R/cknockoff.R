@@ -724,7 +724,7 @@ calc_fj <- function(j,
   # R hat
   selected_mc <- kn_selected_mc
   # Rstar refinement?
-  if(!is.na(Rstar.pack) && length(union(selected_mc, j)) == 1 &&
+  if(!all(is.na(Rstar.pack)) && length(union(selected_mc, j)) == 1 &&
      (j %in% union(kn_selected_mc, cali_selected_mc))){
     Rstar_recursive <- cknockoff_Rstar(X.pack = Rstar.pack$X.pack,
                                        y.data = Rstar.pack$y.data,
